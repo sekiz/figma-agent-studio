@@ -1,6 +1,6 @@
 {
   "name": "@figma-studio/mcp-server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for figma-agent-studio: multi-surface adaptation, RTL mirroring, design-system audits and dev handoff on the Figma canvas.",
   "license": "MIT",
   "type": "module",

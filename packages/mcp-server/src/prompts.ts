@@ -14,6 +14,8 @@ const SHARED_RULES = `Rules:
 - Use the high-level tools; never rebuild layouts with low-level edits.
 - Never pick an option for a missing design-system component yourself. Put each decision to the designer exactly as reported (A synthesize / B adapt variant / C wireframe) and wait for the answer, unless they already told you a default.
 - Keep tool results at detail="concise" unless you need the full list.
+- If a warning hints at a broken layout (overflow, clipped text, non-Auto-Layout source), look at that one frame with figma_preview before reporting it.
+- If the designer rejects a result, figma_undo removes what you created.
 - Reply in the designer's language. Keep the final report brief: what was created (frame ids), what needs their attention, and the next step you recommend.`;
 
 const user = (text: string): GetPromptResult => ({ messages: [{ role: "user", content: { type: "text", text } }] });

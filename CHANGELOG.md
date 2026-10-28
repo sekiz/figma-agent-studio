@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-10-28
+
+Ready to try without a build or a design file.
+
+- **Demo seed:** the plugin's "Create demo screen + design system" button builds a 1440px landing page, a token collection and iOS/Android navigation components. It also seeds deliberate gaps (TV tabs, tablet sidebar) and issues (hardcoded fill, off-grid padding, low contrast) so every tool has something to do.
+- **`figma_preview`:** returns a PNG of a frame so the agent can check its own result visually.
+- **`figma_undo`:** removes what the last operation, or the whole session, created; in-place edits are listed for Cmd/Ctrl+Z.
+- **Release workflow:** tags publish a ready-to-import plugin zip to GitHub Releases, and the MCP server to npm when `NPM_TOKEN` is set. `pnpm package:plugin` builds the zip locally.
+- **Fix:** two-column grids inside narrow containers now fall back to one column instead of producing negative widths.
+- **Fix:** contrast checks no longer treat neighbouring text layers or Auto-Layout siblings as the background.
+- **Docs:** real-canvas QA checklist (`docs/QA.md`).
+- **Tests:** 177, including the full demo pipeline (seed → scan → snapshot → transpose / RTL / audit → apply) on the fake Figma API.
+
 ## 0.2.0 — 2026-10-28
 
 Token efficiency and workflow prompts.

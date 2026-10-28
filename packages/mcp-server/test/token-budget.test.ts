@@ -75,11 +75,11 @@ describe("token budgets", () => {
   it("keeps per-turn overhead small", async () => {
     const core = await connect("core");
     const { tools } = await core.client.listTools();
-    expect(tools).toHaveLength(8);
-    expect(tok(JSON.stringify(tools))).toBeLessThan(2000);
-    expect(tok(core.client.getInstructions() ?? "")).toBeLessThan(200);
+    expect(tools).toHaveLength(10);
+    expect(tok(JSON.stringify(tools))).toBeLessThan(2400);
+    expect(tok(core.client.getInstructions() ?? "")).toBeLessThan(230);
     const full = await connect("full");
-    expect((await full.client.listTools()).tools).toHaveLength(12);
+    expect((await full.client.listTools()).tools).toHaveLength(14);
   });
 
   it("returns compact results for whole jobs", async () => {

@@ -1,5 +1,6 @@
 import type { NodeSummary, PluginMethod, PluginMethods } from "@figma-studio/shared-types";
 import { applyPlan } from "./apply.js";
+import { seedDemo } from "./demo.js";
 import { ensureTextFonts } from "./fonts.js";
 import { renderHandoff, synthesizeComponent } from "./render.js";
 import { scanDesignSystem } from "./scan.js";
@@ -10,7 +11,7 @@ import { getSceneNode, snapshotNode } from "./snapshot.js";
  * relays JSON-RPC requests here via postMessage. Every handler is async and returns plain JSON.
  */
 
-figma.showUI(__html__, { width: 340, height: 460, themeColors: true, title: "Agent Studio" });
+figma.showUI(__html__, { width: 340, height: 560, themeColors: true, title: "Agent Studio" });
 
 type Handler<M extends PluginMethod> = (params: PluginMethods[M]["params"], requestId: string) => Promise<PluginMethods[M]["result"]>;
 type Handlers = { [M in PluginMethod]: Handler<M> };
@@ -122,6 +123,15 @@ const handlers: Handlers = {
     figma.viewport.scrollAndZoomIntoView([section]);
     return { sectionId: section.id };
   },
+  async export_png({ nodeId, maxSize }) {
+    const node = await getSceneNode(nodeId);
+    // Constrain the longer side so tall phone pages and wide TV frames both stay small.
+    const tall = node.height > node.width;
+    const side = Math.min(maxSize, tall ? node.height : node.width);
+    const bytes = await node.exportAsync({ format: "PNG", constraint: { type: tall ? "HEIGHT" : "WIDTH", value: side } });
+    const scale = side / (tall ? node.height : node.width);
+    return { base64: figma.base64Encode(bytes), width: Math.round(node.width * scale), height: Math.round(node.height * scale), name: node.name };
+  },
   async remove_nodes({ nodeIds }) {
     let removed = 0;
     for (const id of nodeIds) {
@@ -143,7 +153,18 @@ interface RpcMessage {
   params: unknown;
 }
 
-figma.ui.onmessage = async (msg: RpcMessage | { type: "ui_ready" } | { type: "storage_set"; key: string; value: unknown }) => {
+figma.ui.onmessage = async (msg: RpcMessage | { type: "ui_ready" } | { type: "seed_demo" } | { type: "storage_set"; key: string; value: unknown }) => {
+  if (msg.type === "seed_demo") {
+    try {
+      await seedDemo();
+      figma.notify("Demo created and selected. Ask your agent to adapt it for iOS, Android and TV.");
+      figma.ui.postMessage({ type: "demo_done" });
+    } catch (e) {
+      figma.notify(`Demo failed: ${(e as Error).message}`, { error: true });
+      figma.ui.postMessage({ type: "demo_done", error: (e as Error).message });
+    }
+    return;
+  }
   if (msg.type === "ui_ready") {
     const [code, port] = await Promise.all([figma.clientStorage.getAsync("pairingCode"), figma.clientStorage.getAsync("bridgePort")]);
     figma.ui.postMessage({ type: "init", fileName: figma.root.name, pairingCode: code ?? null, port: port ?? null });

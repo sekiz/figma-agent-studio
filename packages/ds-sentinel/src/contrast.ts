@@ -60,9 +60,12 @@ export function resolveBackground(node: NodeSnapshot, ancestors: NodeSnapshot[])
     const parent = ancestors[level]!;
     const siblings = parent.children ?? [];
     const idx = siblings.indexOf(current);
+    // In an Auto-Layout flow siblings sit side by side, so only absolute layers can lie underneath.
+    const stacked = parent.layoutMode !== "HORIZONTAL" && parent.layoutMode !== "VERTICAL";
     for (let i = idx - 1; i >= 0; i--) {
       const s = siblings[i]!;
-      if (!s.visible || !contains(s, box)) continue;
+      if (!s.visible || s.type === "TEXT" || !contains(s, box)) continue;
+      if (!stacked && s.layoutPositioning !== "ABSOLUTE") continue;
       const p = topPaint(s.fills);
       if (!p) continue;
       if ("nonSolid" in p) return { kind: "unverifiable", reason: `${p.nonSolid.toLowerCase()} fill on "${s.name}"` };

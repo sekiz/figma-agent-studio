@@ -44,6 +44,12 @@
     </div>
 
     <div class="card">
+      <div class="label">New here?</div>
+      <button id="demo">Create demo screen + design system</button>
+      <div class="hint">Adds a 1440px landing page, tokens and iOS/Android navigation components to this page, with a few deliberate issues to find.</div>
+    </div>
+
+    <div class="card">
       <div class="label">Activity</div>
       <ul id="log"></ul>
     </div>
@@ -136,6 +142,9 @@
         } else if (msg.type === "rpc_result") {
           send({ type: "response", id: msg.id, result: msg.result, error: msg.error });
           log((msg.error ? "✗ " + msg.error.message : "✓ done").slice(0, 120));
+        } else if (msg.type === "demo_done") {
+          $("demo").disabled = false;
+          log(msg.error ? "demo failed: " + msg.error : "demo created and selected");
         } else if (msg.type === "progress") {
           send({ type: "progress", id: msg.id, done: msg.done, total: msg.total, message: msg.message });
         }
@@ -149,6 +158,11 @@
         ta.select();
         try { document.execCommand("copy"); log("copied " + text); } catch { /* user can select the code manually */ }
         ta.remove();
+      };
+      $("demo").onclick = () => {
+        $("demo").disabled = true;
+        log("creating demo…");
+        toSandbox({ type: "seed_demo" });
       };
       $("regen").onclick = () => {
         code = newCode();

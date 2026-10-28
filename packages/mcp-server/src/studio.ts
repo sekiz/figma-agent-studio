@@ -34,6 +34,16 @@ export interface StudioConfig {
   log?: (msg: string) => void;
 }
 
+/** One tool call's footprint on the canvas, kept so it can be undone from the agent. */
+export interface Operation {
+  id: string;
+  label: string;
+  /** Layers this operation created (frames, flags, sections, components): removable. */
+  created: string[];
+  /** Description of changes made to existing layers; those need Figma's own undo. */
+  inPlace?: string;
+}
+
 export type DecisionChoice = "synthesize" | "variant_fallback" | "placeholder";
 
 export interface PendingDecision {
@@ -71,6 +81,8 @@ export class Studio {
   private dsIndexAt = 0;
   private libraryComponents: DsComponent[] | null = null;
   readonly decisions = new Map<string, PendingDecision>();
+  readonly history: Operation[] = [];
+  private opSeq = 0;
 
   constructor(
     private readonly figma: FigmaGateway,
@@ -124,6 +136,25 @@ export class Studio {
         .map((n) => `${n.id} "${n.name}"`)
         .join(", ")}${sel.length > 8 ? ", …" : ""}.`,
     );
+  }
+
+  private record(label: string, created: Array<string | undefined>, inPlace?: string): void {
+    this.history.push({ id: `op${++this.opSeq}`, label, created: created.filter((x): x is string => Boolean(x)), inPlace });
+  }
+
+  /** Removes what the last (or every) operation of this session created. */
+  async undo(scope: "last" | "session" = "last") {
+    const ops = scope === "last" ? this.history.splice(-1) : this.history.splice(0).reverse();
+    if (!ops.length) return { undone: [] as string[], removed: 0, manual: [] as string[] };
+    const ids = ops.flatMap((o) => o.created);
+    const removed = ids.length ? (await this.figma.request("remove_nodes", { nodeIds: ids })).removed : 0;
+    const gone = new Set(ids);
+    for (const [id, d] of this.decisions) if (gone.has(d.rootId)) this.decisions.delete(id);
+    return { undone: ops.map((o) => o.label), removed, manual: ops.flatMap((o) => (o.inPlace ? [o.inPlace] : [])) };
+  }
+
+  async preview(nodeId: string | undefined, maxSize: number) {
+    return this.figma.request("export_png", { nodeId: await this.target(nodeId), maxSize }, { timeoutMs: 60_000 });
   }
 
   private apply(plan: MutationPlan): Promise<ApplyPlanResult> {
@@ -184,6 +215,10 @@ export class Studio {
         decisions,
       });
     }
+    this.record(
+      `Adapt "${source.name}" to ${input.targetSurfaces.join(", ")}`,
+      results.flatMap((r) => [r.frameId, ...r.decisions.map((d) => d.flagId)]),
+    );
     return { source: { id: source.id, name: source.name }, results };
   }
 
@@ -202,6 +237,7 @@ export class Studio {
         const made = await this.figma.request("synthesize_component", spec, PLAN_TIMEOUT);
         this.remember({ id: made.componentId, name: made.name, source: "local", width: spec.width, height: spec.height });
         const r = await replace({ id: made.componentId }, d.label);
+        this.record(`Synthesize "${made.name}"`, [made.componentId], `"${d.label}" placeholder swapped for an instance`);
         outcome = `Synthesized master component "${made.name}" on the "🧩 DS Proposals" page and placed an instance.${r.warnings.length ? ` Warnings: ${r.warnings.join(" ")}` : ""}`;
         break;
       }
@@ -209,11 +245,13 @@ export class Studio {
         const c = d.candidates[candidateIndex];
         if (!c) throw new Error(`No candidate #${candidateIndex}. The design system has no related component — choose "synthesize" or "placeholder".`);
         const r = await replace(c.target, `${d.label} (adapted from ${c.name})`);
+        this.record(`Adapt variant for "${d.label}"`, [], `"${d.label}" placeholder swapped for "${c.name}"`);
         outcome = `Placed closest variant "${c.name}" (match score ${c.score}). Review its sizing for ${SURFACE_LABELS[d.surface]}.${r.warnings.length ? ` Warnings: ${r.warnings.join(" ")}` : ""}`;
         break;
       }
       case "placeholder": {
         await this.apply({ root: { mode: "existing", nodeId: d.placeholderId }, ops: [{ op: "rename", path: [], name: `[WIREFRAME] ${d.label}` }], label: "Keep wireframe" });
+        this.record(`Keep wireframe for "${d.label}"`, [], `"${d.label}" placeholder renamed`);
         outcome = `Kept a wireframe placeholder "[WIREFRAME] ${d.label}" for the designer to complete.`;
         break;
       }
@@ -237,6 +275,8 @@ export class Studio {
       findMirrorComponent: createMirrorFinder(ds),
     });
     const applied = await this.apply(rtl.plan);
+    const duplicate = input.createDuplicate ?? true;
+    this.record(`Mirror "${source.name}" to RTL`, duplicate ? [applied.rootId] : [], duplicate ? undefined : `"${source.name}" mirrored in place`);
     let toTranslate: Array<{ nodeId: string; name: string; characters: string }> = [];
     if (input.targetLanguage && input.targetLanguage !== "none") {
       const mirrored = await this.figma.request("snapshot", { nodeId: applied.rootId }, { timeoutMs: 60_000 });
@@ -251,8 +291,10 @@ export class Studio {
     };
   }
 
-  applyText(updates: Array<{ nodeId: string; characters: string }>) {
-    return this.figma.request("apply_text", { updates }, PLAN_TIMEOUT);
+  async applyText(updates: Array<{ nodeId: string; characters: string }>) {
+    const r = await this.figma.request("apply_text", { updates }, PLAN_TIMEOUT);
+    this.record(`Write ${r.updated} text layers`, [], `${r.updated} text layers rewritten`);
+    return r;
   }
 
   // -------------------------------------------------------------------------
@@ -265,6 +307,7 @@ export class Studio {
     const report = auditDesignSystem(root, ds);
     if (!input.autoFixSafeTokens || !report.fixPlan) return { report, fixed: 0, fixWarnings: [] };
     const applied = await this.apply(report.fixPlan);
+    this.record(`Bind tokens in "${root.name}"`, [], `${applied.applied} token bindings in "${root.name}"`);
     return { report, fixed: applied.applied, fixWarnings: applied.warnings };
   }
 
@@ -277,6 +320,7 @@ export class Studio {
     const [root, ds] = await Promise.all([this.figma.request("snapshot", { nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
     const spec = buildHandoff(root, ds, input.targetStack);
     const sectionId = input.renderOnCanvas === false ? undefined : (await this.figma.request("render_handoff", { nodeId, spec }, PLAN_TIMEOUT)).sectionId;
+    if (sectionId) this.record(`Handoff for "${root.name}"`, [sectionId]);
     return { sectionId, title: spec.title, markdown: handoffToMarkdown(spec), tokens: spec.ledger.length, notes: spec.notes.length, codeLines: spec.code.text.split("\n").length, language: spec.code.language };
   }
 }

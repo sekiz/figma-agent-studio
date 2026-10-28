@@ -22,7 +22,7 @@ export async function makeText(characters: string, opts: { size?: number; style?
   return t;
 }
 
-function stack(name: string, mode: "VERTICAL" | "HORIZONTAL", spacing = 0, padding = 0): FrameNode {
+export function stack(name: string, mode: "VERTICAL" | "HORIZONTAL", spacing = 0, padding = 0): FrameNode {
   const f = figma.createFrame();
   f.name = name;
   f.layoutMode = mode;

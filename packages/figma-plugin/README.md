@@ -2,7 +2,13 @@
 
 Executes mutation plans sent by `@figma-studio/mcp-server`.
 
-## Install (development)
+## Install
+
+Download `agent-studio-figma-plugin-<version>.zip` from the repository's Releases, unzip it, then in the Figma **desktop** app choose *Plugins → Development → Import plugin from manifest…* and pick `manifest.json`.
+
+The **Create demo screen + design system** button in the plugin window seeds a test file (landing page, tokens, iOS/Android navigation components, and deliberate issues). See `docs/QA.md`.
+
+## Build from source
 
 ```bash
 pnpm install

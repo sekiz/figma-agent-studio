@@ -187,3 +187,13 @@ describe("team library indexer", () => {
     await expect(fetchLibraryComponents({ token: "t", fileKeys: ["F"], fetchImpl: fakeFetch })).rejects.toThrow("403");
   });
 });
+
+describe("contrast background regressions", () => {
+  it("never treats a neighbouring text layer or an Auto-Layout sibling as the background", () => {
+    const a = text("A", "First", { x: 0, y: 0, width: 100, height: 20, fills: [solid(BLACK)] });
+    const b = text("B", "Second", { x: 0, y: 0, width: 100, height: 20, fills: [solid(BLACK)] });
+    const card = frame("Card", { x: 0, y: 0, width: 100, height: 20, fills: [solid(BLACK)] });
+    const flow = frame("Flow", { fills: [solid(WHITE)] }, [a, card, b]);
+    expect(resolveBackground(b, [flow])).toMatchObject({ kind: "solid", color: { r: 1, g: 1, b: 1 } });
+  });
+});

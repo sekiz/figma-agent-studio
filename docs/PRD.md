@@ -180,6 +180,8 @@ Some clients only accept tool names matching `^[a-zA-Z0-9_-]{1,64}$`, so `figma.
 | `figma_apply_text` | `updates[]` | Used after translation |
 | `figma_audit_design_system` | `nodeId` | `autoFixSafeTokens` |
 | `figma_generate_dev_handoff` | `nodeId`, `targetStack` | `renderOnCanvas` |
+| `figma_preview` | | PNG of a frame for visual self-check (longest side ≤ `maxSize`) |
+| `figma_undo` | | `scope: last \| session`; removes created layers, lists in-place edits |
 | `figma_connect`, `figma_inspect` | | Pairing/status; compact layer outline |
 | `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout` | | Only with `FIGMA_STUDIO_TOOLSET=full` |
 
@@ -212,4 +214,4 @@ Some clients only accept tool names matching `^[a-zA-Z0-9_-]{1,64}$`, so `figma.
 | 1 | Bridge (rooms, pairing, heartbeat, origin policy), plugin RPC, raw primitives | ✅ |
 | 2 | SurfaceMatrix, safe areas, DS-Sentinel matcher, missing-component protocol, library indexer | ✅ |
 | 3 | RTLMatrix with shielding, DevSpec ledger / notes / scaffolds | ✅ |
-| 4 | 166 tests (unit, integration, stdio e2e, fake-Figma executor), packaging; real-canvas QA and store publishing | 🟡 QA and publishing pending |
+| 4 | 177 tests (unit, integration, stdio e2e, fake-Figma executor), packaging; real-canvas QA and store publishing | 🟡 QA and publishing pending |

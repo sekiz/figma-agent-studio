@@ -6,7 +6,7 @@ Select a desktop frame, ask your agent, and get platform-accurate **iOS**, **And
 
 [Türkçe README](docs/README.tr.md) · [Product requirements (v1.1)](docs/PRD.md) · [Architecture](docs/ARCHITECTURE.md)
 
-> **Status: 0.2 (alpha).** The engines, the bridge, the MCP server and the plugin's plan executor are covered by 166 automated tests, including a strict fake of the Figma Plugin API. The plugin hasn't had broad QA in the real Figma desktop app yet, so please [report](https://github.com/sekiz/figma-agent-studio/issues) anything that behaves differently on a real canvas.
+> **Status: 0.3 (alpha).** The engines, the bridge, the MCP server and the plugin's plan executor are covered by 177 automated tests, including the full demo pipeline on a strict fake of the Figma Plugin API. The plugin hasn't had broad QA in the real Figma desktop app yet. The [QA checklist](docs/QA.md) takes about 20 minutes; please [report](https://github.com/sekiz/figma-agent-studio/issues) anything that behaves differently on a real canvas.
 
 ```
 ┌──────────────┐  stdio (MCP)  ┌──────────────────────────┐  ws://127.0.0.1:3055  ┌─────────────────────┐  postMessage  ┌──────────────────┐
@@ -25,6 +25,8 @@ Select a desktop frame, ask your agent, and get platform-accurate **iOS**, **And
 | `figma_audit_design_system` | Finds detached components, hardcoded colors that equal a variable, off-palette colors, off-grid spacing, unbound spacing tokens and WCAG AA contrast failures, and gives a health score. With `autoFixSafeTokens` it binds identical values to their variables. |
 | `figma_generate_dev_handoff` | Adds a `[HANDOFF] <Screen> - <Platform>` section: a token ledger (CSS var / Tailwind v4 / SwiftUI / Compose / RN), responsive-constraint notes and a code scaffold (React+Tailwind, SwiftUI, Jetpack Compose or React Native). |
 | `figma_apply_text` | Writes translations (or any copy) into many text layers in one batch. |
+| `figma_preview` | Shows a frame to the agent as an image, so it can check its own result. Use it sparingly, since images cost tokens. |
+| `figma_undo` | Removes what the last operation (or the whole session) created. In-place edits are listed for Cmd/Ctrl+Z. |
 | `figma_connect`, `figma_inspect` | Pairing and connection status; a compact layer outline of the selection or any layer. |
 | `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout` | Only with `FIGMA_STUDIO_TOOLSET=full`: design-system listing and low-level primitives. |
 
@@ -46,7 +48,7 @@ The server ships five ready-made runbooks. In Claude Code they appear as `/figma
 
 Write-capable Figma MCP servers usually expose dozens of primitive tools. The model reads the node tree as JSON and then issues one call per change. figma-agent-studio does the layout work server-side and applies it as one plan, and its results are written for a model to read:
 
-- **Small, consolidated toolset:** 8 core tools instead of dozens of primitives (`FIGMA_STUDIO_TOOLSET=full` adds 4 more).
+- **Small, consolidated toolset:** 10 core tools instead of dozens of primitives (`FIGMA_STUDIO_TOOLSET=full` adds 4 more).
 - **One call per job.** The node tree never goes through the model; the engines read it directly.
 - **Plain-text results with a `detail` switch.** `concise` is the default; `detailed` lists every item.
 - **Grouped warnings.** "48× [iOS, Android M3, Tablet] font … not installed" is one line, not 48.
@@ -58,8 +60,8 @@ Measured on the same machine with the same method (≈3.6 characters per token, 
 | Server | Tools | Tool definitions (re-sent every turn) |
 |---|---|---|
 | cursor-talk-to-figma-mcp 0.3.5 | 40 | ≈ 6,470 tokens |
-| **figma-agent-studio 0.2 (core)** | **8** | **≈ 1,880 tokens** |
-| figma-agent-studio 0.2 (full) | 12 | ≈ 2,650 tokens |
+| **figma-agent-studio 0.3 (core)** | **10** | **≈ 2,240 tokens** |
+| figma-agent-studio 0.3 (full) | 14 | ≈ 3,000 tokens |
 
 Results for the 1440px fixture screen in the test suite:
 
@@ -93,7 +95,9 @@ Cursor (`~/.cursor/mcp.json`) or any MCP client:
 }
 ```
 
-**2. Install the Figma plugin.** In the Figma **desktop** app: *Plugins → Development → Import plugin from manifest…* and choose `packages/figma-plugin/manifest.json` (run `pnpm build` first; see [Development](#development)). A Community release is planned.
+**2. Install the Figma plugin.** Download `agent-studio-figma-plugin-<version>.zip` from [Releases](https://github.com/sekiz/figma-agent-studio/releases) and unzip it. In the Figma **desktop** app choose *Plugins → Development → Import plugin from manifest…* and pick `manifest.json`. No build step is needed. A Community release is planned.
+
+**No design file at hand?** Click **Create demo screen + design system** in the plugin window. It adds a landing page, tokens and iOS/Android navigation components, plus a few deliberate gaps and issues, so every tool has something to do.
 
 **3. Pair.** Run the plugin. It shows a code like `K7QM-2XPA`. Tell your agent:
 
@@ -148,7 +152,8 @@ packages/
 ```bash
 pnpm install
 pnpm build        # builds every package (plugin → packages/figma-plugin/dist)
-pnpm test         # 166 tests: engines, bridge, MCP server, stdio e2e, plugin executor on a fake Figma API
+pnpm test         # 177 tests: engines, bridge, MCP server, stdio e2e, plugin executor + demo pipeline on a fake Figma API
+pnpm package:plugin  # → release/agent-studio-figma-plugin-<version>.zip
 pnpm typecheck
 ```
 
@@ -170,6 +175,10 @@ While iterating on the plugin, run `pnpm --filter @figma-studio/figma-plugin wat
 - Figma has no Plugin API connectors in design files. Handoff notes reference layers by name, and audit flags are also written as Dev Mode annotations where the plan supports them.
 
 See the [roadmap in the PRD](docs/PRD.md#9-roadmap-after-01).
+
+## Releasing
+
+Push a tag that matches the package version (e.g. `v0.3.0`). The release workflow tests and builds the repository, attaches the plugin zip to a GitHub Release, and publishes `@figma-studio/mcp-server` to npm when the `NPM_TOKEN` repository secret is set.
 
 ## Contributing
 

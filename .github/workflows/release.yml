@@ -1,0 +1,56 @@
+name: Release
+
+# Push a tag like v0.3.0 to publish:
+#   - a GitHub Release with the ready-to-import Figma plugin zip
+#   - @figma-studio/mcp-server on npm (only when the NPM_TOKEN secret is set)
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: Check tag matches package version
+        run: |
+          v=$(node -p "require('./packages/mcp-server/package.json').version")
+          test "v$v" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != package version v$v"; exit 1; }
+
+      - name: Package Figma plugin
+        run: pnpm package:plugin
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true
+          body: |
+            **Install the Figma plugin:** download `agent-studio-figma-plugin-*.zip`, unzip it, then in the Figma desktop app choose *Plugins → Development → Import plugin from manifest…* and pick `manifest.json`.
+
+            **Add the MCP server:** `claude mcp add figma-studio -- npx -y @figma-studio/mcp-server`
+
+            See CHANGELOG.md for details.
+
+      - name: Publish MCP server to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter @figma-studio/mcp-server publish --access public --no-git-checks --provenance

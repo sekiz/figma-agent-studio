@@ -12,7 +12,7 @@ claude mcp add figma-studio -- npx -y @figma-studio/mcp-server
 
 Then open the **Agent Studio (MCP bridge)** plugin in Figma and give your agent the pairing code it shows.
 
-Core tools (8): `figma_connect`, `figma_inspect`, `figma_transpose_surface`, `figma_resolve_missing_component`, `figma_mirror_rtl`, `figma_apply_text`, `figma_audit_design_system`, `figma_generate_dev_handoff`. Set `FIGMA_STUDIO_TOOLSET=full` to add `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills` and `figma_set_auto_layout`.
+Core tools (10): `figma_connect`, `figma_inspect`, `figma_transpose_surface`, `figma_resolve_missing_component`, `figma_mirror_rtl`, `figma_apply_text`, `figma_audit_design_system`, `figma_generate_dev_handoff`, `figma_preview`, `figma_undo`. Set `FIGMA_STUDIO_TOOLSET=full` to add `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills` and `figma_set_auto_layout`.
 
 Prompts (slash commands): `adapt_screen`, `localize_rtl`, `audit_and_fix`, `dev_handoff`, `ship_all_platforms`.
 

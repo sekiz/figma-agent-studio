@@ -7,7 +7,7 @@ import { auditText, groupWarnings, outline, section, type Detail } from "./forma
 import { registerPrompts } from "./prompts.js";
 import type { FigmaGateway, Studio } from "./studio.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 /** The live plugin connection (BridgeClient in production). */
 export interface Connection extends FigmaGateway {
@@ -29,7 +29,8 @@ export const SERVER_INSTRUCTIONS = `Figma DesignOps tools. Each tool does a whol
 - Layer ids look like "123:456". Omit nodeId to act on the designer's current selection.
 - On "not paired": ask the designer for the 8-character code in the Agent Studio plugin window, then call figma_connect.
 - Never improvise UI for a missing design-system component. Relay each decision to the designer verbatim and call figma_resolve_missing_component with their choice.
-- Results default to detail="concise". Ask for "detailed" only when you need every item.`;
+- Results default to detail="concise". Ask for "detailed" only when you need every item.
+- figma_preview shows a frame as an image (it costs tokens, so use it to verify doubtful results). figma_undo removes what this session created.`;
 
 function ok(text: string): CallToolResult {
   return { content: [{ type: "text", text }] };
@@ -261,6 +262,38 @@ export function createServer(studio: Studio, conn: Connection, bridgeUrl: string
         ? `Created ${r.title} (${r.sectionId}): ${r.tokens} ledger rows, ${r.notes} responsive notes, ${r.codeLines}-line ${r.language} scaffold.`
         : `${r.title}: ${r.tokens} ledger rows, ${r.notes} notes.`;
       return ok(detail === "detailed" || !r.sectionId ? `${head}\n\n${r.markdown}` : head);
+    }),
+  );
+
+  // ------------------------------------------------------------------ verify & undo
+  server.registerTool(
+    "figma_preview",
+    {
+      title: "See a frame",
+      description:
+        "Returns a PNG of a frame so you can check the result visually (overflow, clipped text, wrong order). It costs roughly (width×height)/750 tokens, so use it sparingly: one frame at a time, and only when a layout result looks doubtful.",
+      inputSchema: { nodeId: target, maxSize: z.number().int().min(256).max(1536).default(768).describe("Longest side in px") },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async ({ nodeId, maxSize }) => {
+      const img = await studio.preview(nodeId, maxSize);
+      return { content: [{ type: "text", text: `"${img.name}" at ${img.width}×${img.height}px` }, { type: "image", data: img.base64, mimeType: "image/png" }] };
+    }),
+  );
+
+  server.registerTool(
+    "figma_undo",
+    {
+      title: "Undo agent changes",
+      description:
+        'Removes what this session created: frames, flags, handoff sections and synthesized components. scope="last" (default) undoes the latest operation; "session" undoes everything. In-place edits such as token bindings or rewritten text are listed for the designer to undo with Cmd/Ctrl+Z.',
+      inputSchema: { scope: z.enum(["last", "session"]).default("last") },
+    },
+    wrap(async ({ scope }) => {
+      const r = await studio.undo(scope);
+      if (!r.undone.length) return ok("Nothing to undo in this session.");
+      const manual = r.manual.length ? section("Needs Cmd/Ctrl+Z in Figma (edited existing layers)", r.manual) : "";
+      return ok(`Undid ${r.undone.length} operation(s), removed ${r.removed} layer(s).${section("Undone", r.undone)}${manual}`);
     }),
   );
 

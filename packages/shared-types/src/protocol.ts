@@ -126,6 +126,7 @@ export interface PluginMethods {
   synthesize_component: { params: SynthesizeSpec; result: { componentId: string; name: string } };
   render_handoff: { params: { nodeId: string; spec: HandoffSpec }; result: { sectionId: string } };
   remove_nodes: { params: { nodeIds: string[] }; result: { removed: number } };
+  export_png: { params: { nodeId: string; maxSize: number }; result: { base64: string; width: number; height: number; name: string } };
 }
 
 export type PluginMethod = keyof PluginMethods;

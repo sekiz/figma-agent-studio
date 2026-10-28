@@ -429,7 +429,11 @@ function adaptGrid(
   const kids = n.children ?? [];
   const flow = (c: NodeSnapshot) => c.visible && c.layoutPositioning !== "ABSOLUTE";
 
-  switch (spec.grid) {
+  const twoColumnWidth = Math.floor((innerWidth - gap) / 2);
+  // Two columns narrower than a small card read worse than one; fall back to a stack.
+  const mode = spec.grid === "two_column" && twoColumnWidth < 120 ? "stack" : spec.grid;
+
+  switch (mode) {
     case "stack": {
       b.layout(path, { ...spacingPatch, layoutMode: "VERTICAL", layoutWrap: "NO_WRAP" });
       fitWidth(n, path, avail ?? n.width, parentAutoLayout, b);
@@ -443,7 +447,7 @@ function adaptGrid(
     case "two_column": {
       b.layout(path, { ...spacingPatch, layoutMode: "HORIZONTAL", layoutWrap: "WRAP", counterAxisSpacing: gap });
       fitWidth(n, path, avail ?? n.width, parentAutoLayout, b);
-      const col = Math.floor((innerWidth - gap) / 2);
+      const col = twoColumnWidth;
       kids.forEach((c, i) => {
         if (!flow(c)) return;
         b.push({ op: "setSizing", path: [...path, i], horizontal: "FIXED" });

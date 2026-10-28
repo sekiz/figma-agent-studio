@@ -64,6 +64,10 @@ export class FakeNode {
   mainComponent: FakeNode | null = null;
   description = "";
   key = "";
+  remote = false;
+  variantProperties: Record<string, string> | null = null;
+  vectorPaths: unknown[] = [];
+  selection: FakeNode[] = [];
 
   constructor(type: string, name = type) {
     this.type = type;
@@ -81,6 +85,15 @@ export class FakeNode {
     if (v === "FILL" && !this.parentIsAutoLayout()) throw new Error(`FILL can only be set on children of auto-layout frames ("${this.name}")`);
     if (v === "HUG" && this.layoutMode === "NONE" && this.type !== "TEXT") throw new Error(`HUG requires auto-layout ("${this.name}")`);
     this._sizingH = v;
+    // Rough geometry so engines see realistic widths: FILL takes the parent's inner width
+    // (shared equally among FILL siblings in a row).
+    if (v === "FILL" && this.parent) {
+      const p = this.parent;
+      const inner = p.width - p.paddingLeft - p.paddingRight;
+      const fills = p.layoutMode === "HORIZONTAL" ? Math.max(1, p.children.filter((c) => c._sizingH === "FILL").length) : 1;
+      this.width = Math.max(1, (inner - (fills - 1) * p.itemSpacing) / fills);
+      this.children.filter((c) => c._sizingH === "FILL").forEach((c) => (c.layoutSizingHorizontal = "FILL"));
+    }
   }
   get layoutSizingVertical() {
     return this._sizingV;
@@ -160,6 +173,19 @@ export class FakeNode {
   getRangeAllFontNames() {
     return this.fontName === MIXED ? [{ family: "Inter", style: "Regular" }] : [this.fontName];
   }
+  async getMainComponentAsync() {
+    return this.mainComponent;
+  }
+  async exportAsync(opts: { constraint: { type: string; value: number } }) {
+    return new Uint8Array([137, 80, 78, 71, opts.constraint.value % 256]);
+  }
+  findAllWithCriteria({ types }: { types: string[] }): FakeNode[] {
+    const out: FakeNode[] = [];
+    const visit = (n: FakeNode) => n.children.forEach((c) => (types.includes(c.type) && out.push(c), visit(c)));
+    visit(this);
+    return out;
+  }
+  async loadAsync() {}
   createInstance() {
     const i = new FakeNode("INSTANCE", this.name);
     i.mainComponent = this;
@@ -170,12 +196,26 @@ export class FakeNode {
   swapComponent(c: FakeNode) {
     this.mainComponent = c;
   }
-  setBoundVariable(field: string, v: { id: string }) {
+  setBoundVariable(field: string, v: { id: string; valuesByMode?: Record<string, unknown> }) {
     this.boundVariables[field] = { type: "VARIABLE_ALIAS", id: v.id };
+    const value = v.valuesByMode ? Object.values(v.valuesByMode)[0] : undefined;
+    if (typeof value === "number") (this as unknown as Record<string, number>)[field] = value;
   }
   get absoluteBoundingBox() {
     return { x: this.x, y: this.y, width: this.width, height: this.height };
   }
+}
+
+interface FakeVariable {
+  id: string;
+  key: string;
+  name: string;
+  resolvedType: string;
+  variableCollectionId: string;
+  valuesByMode: Record<string, unknown>;
+  scopes: string[];
+  codeSyntax: Record<string, string>;
+  setValueForMode(mode: string, value: unknown): void;
 }
 
 export interface FakeFigma {
@@ -190,11 +230,20 @@ export function installFakeFigma(): FakeFigma {
   const page = new FakeNode("PAGE", "Page 1");
   const state: FakeFigma = { page, installedFonts: new Set(["Inter|Regular", "Inter|Medium", "Inter|Bold", "Roboto|Regular", "Roboto|Bold"]), undoCommits: 0, components: new Map() };
   const append = (n: FakeNode) => (page.appendChild(n), n);
+  const variables = new Map<string, FakeVariable>();
+  const collections = new Map<string, { id: string; name: string; modes: Array<{ modeId: string }>; defaultModeId: string }>();
   (globalThis as Record<string, unknown>).figma = {
     mixed: MIXED,
     currentPage: page,
-    root: { name: "Fake.fig", children: [page] },
+    root: { name: "Fake.fig", children: [page], findAllWithCriteria: (q: { types: string[] }) => page.findAllWithCriteria(q) },
+    notify: () => {},
+    base64Encode: (b: Uint8Array) => Buffer.from(b).toString("base64"),
+    loadAllPagesAsync: async () => {},
+    getLocalPaintStylesAsync: async () => [],
     createFrame: () => append(new FakeNode("FRAME", "Frame")),
+    createComponent: () => append(new FakeNode("COMPONENT", "Component")),
+    createRectangle: () => append(new FakeNode("RECTANGLE", "Rectangle")),
+    createVector: () => append(new FakeNode("VECTOR", "Vector")),
     createText: () => append(new FakeNode("TEXT", "Text")),
     createEllipse: () => append(new FakeNode("ELLIPSE", "Ellipse")),
     createSection: () => append(new FakeNode("SECTION", "Section")),
@@ -213,7 +262,32 @@ export function installFakeFigma(): FakeFigma {
     commitUndo: () => state.undoCommits++,
     viewport: { scrollAndZoomIntoView: () => {} },
     variables: {
-      getVariableByIdAsync: async (id: string) => ({ id }),
+      createVariableCollection: (name: string) => {
+        const c = { id: `VC:${collections.size + 1}`, name, modes: [{ modeId: "m1" }], defaultModeId: "m1" };
+        collections.set(c.id, c);
+        return c;
+      },
+      createVariable: (name: string, collection: { id: string }, resolvedType: string) => {
+        const v: FakeVariable = {
+          id: `VariableID:${variables.size + 1}`,
+          key: `vk${variables.size + 1}`,
+          name,
+          resolvedType,
+          variableCollectionId: collection.id,
+          valuesByMode: {},
+          scopes: [],
+          codeSyntax: {},
+          setValueForMode(mode: string, value: unknown) {
+            this.valuesByMode[mode] = value;
+          },
+        };
+        variables.set(v.id, v);
+        return v;
+      },
+      getLocalVariablesAsync: async () => [...variables.values()],
+      getLocalVariableCollectionsAsync: async () => [...collections.values()],
+      getVariableCollectionByIdAsync: async (id: string) => collections.get(id) ?? null,
+      getVariableByIdAsync: async (id: string) => variables.get(id) ?? { id },
       setBoundVariableForPaint: (p: object, _f: string, v: { id: string }) => ({ ...p, boundVariables: { color: { type: "VARIABLE_ALIAS", id: v.id } } }),
     },
   };

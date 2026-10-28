@@ -43,6 +43,8 @@ function fakeFigma(snapshot = desktopLanding()) {
           return { removed: (params as { nodeIds: string[] }).nodeIds.length } as never;
         case "render_handoff":
           return { sectionId: "SEC:1" } as never;
+        case "export_png":
+          return { base64: "iVBORw0K", width: 393, height: 768, name: "iOS" } as never;
         case "apply_text":
           return { updated: (params as { updates: unknown[] }).updates.length, warnings: [] } as never;
         default:
@@ -163,8 +165,10 @@ describe("MCP surface", () => {
         "figma_generate_dev_handoff",
         "figma_inspect",
         "figma_mirror_rtl",
+        "figma_preview",
         "figma_resolve_missing_component",
         "figma_transpose_surface",
+        "figma_undo",
       ].sort(),
     );
     // Some clients (e.g. the Claude API) only accept ^[a-zA-Z0-9_-]{1,64}$ — no dots.
@@ -204,5 +208,41 @@ describe("selection defaults", () => {
   it("asks which layer to use when several are selected", async () => {
     const gateway = { request: (async () => [{ id: "1:1", name: "A", type: "FRAME" }, { id: "1:2", name: "B", type: "FRAME" }]) as never };
     await expect(new Studio(gateway).audit({})).rejects.toThrow('2 layers are selected; pass nodeId for one of them: 1:1 "A", 1:2 "B"');
+  });
+});
+
+describe("preview and undo", () => {
+  it("removes what the last operation created and reports in-place edits", async () => {
+    const f = fakeFigma();
+    const studio = new Studio(f.gateway);
+    const { results } = await studio.transpose({ sourceNodeId: "1:1", targetSurfaces: ["ios"] });
+    await studio.handoff({ nodeId: "1:1", targetStack: "swiftui" });
+    await studio.applyText([{ nodeId: "1:5", characters: "مرحبا" }]);
+
+    const last = await studio.undo("last");
+    expect(last).toMatchObject({ undone: ["Write 1 text layers"], removed: 0, manual: ["1 text layers rewritten"] });
+
+    const rest = await studio.undo("session");
+    expect(rest.undone).toEqual(['Handoff for "Landing — Desktop"', 'Adapt "Landing — Desktop" to ios']);
+    const removed = (f.calls.at(-1)!.params as { nodeIds: string[] }).nodeIds;
+    // The fixture DS has an iOS tab bar, so only the top nav was flagged.
+    expect(removed).toEqual(["SEC:1", results[0]!.frameId, "T:flag:ios:nav_top"]);
+    // Decisions that pointed into the removed frame are dropped too.
+    expect(studio.decisions.size).toBe(0);
+    expect((await studio.undo()).undone).toEqual([]);
+  });
+
+  it("returns an image block from figma_preview", async () => {
+    const studio = new Studio(fakeFigma().gateway);
+    const conn = { ...fakeFigma().gateway, connected: true, paired: true, pluginOnline: true, fileName: "F", pair: async () => ({}) };
+    const server = createServer(studio, conn as never, "ws://x");
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t", version: "0" });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const r = await client.callTool({ name: "figma_preview", arguments: { nodeId: "9:1", maxSize: 512 } });
+    expect(r.content).toEqual([
+      { type: "text", text: '"iOS" at 393×768px' },
+      { type: "image", data: "iVBORw0K", mimeType: "image/png" },
+    ]);
   });
 });
