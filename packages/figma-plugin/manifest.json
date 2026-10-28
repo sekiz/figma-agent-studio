@@ -1,0 +1,14 @@
+{
+  "name": "Agent Studio (MCP bridge)",
+  "id": "figma-agent-studio-dev",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["ws://localhost:3055", "ws://127.0.0.1:3055"],
+    "reasoning": "The plugin only talks to the figma-agent-studio bridge running on the user's own machine (localhost). No remote servers are contacted."
+  },
+  "permissions": []
+}

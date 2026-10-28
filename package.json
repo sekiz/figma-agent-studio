@@ -1,0 +1,38 @@
+{
+  "name": "figma-agent-studio",
+  "private": true,
+  "description": "Local-first AI DesignOps engine: drive the Figma canvas from MCP agents (Claude Code, Cursor) for multi-surface adaptation, RTL mirroring, design-system audits and dev handoff.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:bridge": "pnpm --filter @figma-studio/bridge-server start",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "turbo": "^2.11.10",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sekiz/figma-agent-studio.git"
+  },
+  "homepage": "https://github.com/sekiz/figma-agent-studio#readme",
+  "bugs": {
+    "url": "https://github.com/sekiz/figma-agent-studio/issues"
+  }
+}

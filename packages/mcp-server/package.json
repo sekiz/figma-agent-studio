@@ -1,0 +1,58 @@
+{
+  "name": "@figma-studio/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for figma-agent-studio: multi-surface adaptation, RTL mirroring, design-system audits and dev handoff on the Figma canvas.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "figma-studio-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "figma",
+    "design-system",
+    "designops",
+    "rtl",
+    "claude",
+    "cursor"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@figma-studio/bridge-server": "workspace:*",
+    "@figma-studio/devspec": "workspace:*",
+    "@figma-studio/ds-sentinel": "workspace:*",
+    "@figma-studio/rtl-engine": "workspace:*",
+    "@figma-studio/shared-types": "workspace:*",
+    "@figma-studio/surface-engine": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sekiz/figma-agent-studio.git",
+    "directory": "packages/mcp-server"
+  },
+  "homepage": "https://github.com/sekiz/figma-agent-studio#readme",
+  "bugs": {
+    "url": "https://github.com/sekiz/figma-agent-studio/issues"
+  }
+}

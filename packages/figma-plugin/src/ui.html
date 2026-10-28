@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --bg: var(--figma-color-bg, #fff);
+        --fg: var(--figma-color-text, #1e1e1e);
+        --muted: var(--figma-color-text-secondary, #6b6b6b);
+        --border: var(--figma-color-border, #e6e6e6);
+        --accent: #d946ef;
+        --ok: #16a34a;
+        --bad: #dc2626;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 16px; font: 12px/1.45 Inter, system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+      h1 { font-size: 13px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+      .dot.on { background: var(--ok); }
+      .card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+      .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+      .code { font: 600 26px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; letter-spacing: .08em; text-align: center; padding: 10px 0; user-select: all; }
+      .row { display: flex; gap: 8px; }
+      button { flex: 1; border: 1px solid var(--border); background: transparent; color: var(--fg); border-radius: 6px; padding: 6px 8px; font: inherit; cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .hint { color: var(--muted); margin-top: 8px; }
+      .hint code { background: var(--border); padding: 1px 4px; border-radius: 3px; }
+      #log { list-style: none; margin: 0; padding: 0; max-height: 120px; overflow: auto; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+      #log li { padding: 2px 0; border-bottom: 1px dashed var(--border); }
+      input { width: 64px; border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; background: transparent; color: var(--fg); font: inherit; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span><span id="status">Connecting to local bridge…</span></h1>
+
+    <div class="card">
+      <div class="label">Pairing code</div>
+      <div id="code" class="code">————-————</div>
+      <div class="row">
+        <button id="copy" class="primary">Copy</button>
+        <button id="regen">New code</button>
+      </div>
+      <div class="hint">Tell your agent: <code id="phrase">Connect to Figma with code …</code></div>
+    </div>
+
+    <div class="card">
+      <div class="label">Activity</div>
+      <ul id="log"></ul>
+    </div>
+
+    <div class="hint">Bridge port <input id="port" type="number" min="1024" max="65535" /> · keep this window open while the agent works.</div>
+
+    <script>
+      const ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+      const PROTOCOL_VERSION = 1;
+      const $ = (id) => document.getElementById(id);
+      let ws = null;
+      let code = null;
+      let port = 3055;
+      let fileName = "";
+      let backoff = 500;
+      let reconnectTimer = null;
+
+      const fmt = (c) => c.slice(0, 4) + "-" + c.slice(4);
+      const toSandbox = (msg) => parent.postMessage({ pluginMessage: msg }, "*");
+
+      function newCode() {
+        const bytes = new Uint8Array(8);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, (b) => ALPHABET[b % ALPHABET.length]).join("");
+      }
+
+      function log(text) {
+        const li = document.createElement("li");
+        li.textContent = new Date().toLocaleTimeString() + "  " + text;
+        $("log").prepend(li);
+        while ($("log").children.length > 30) $("log").lastChild.remove();
+      }
+
+      function setStatus(text, on) {
+        $("status").textContent = text;
+        $("dot").classList.toggle("on", !!on);
+      }
+
+      function showCode() {
+        $("code").textContent = fmt(code);
+        $("phrase").textContent = "Connect to Figma with code " + fmt(code);
+      }
+
+      function send(msg) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      }
+
+      function connect() {
+        clearTimeout(reconnectTimer);
+        if (ws) { ws.onclose = null; ws.close(); }
+        setStatus("Connecting to ws://localhost:" + port + "…", false);
+        ws = new WebSocket("ws://localhost:" + port);
+        ws.onopen = () => {
+          backoff = 500;
+          send({ type: "register_plugin", protocolVersion: PROTOCOL_VERSION, pairingCode: code, fileName });
+        };
+        ws.onmessage = (ev) => {
+          let msg;
+          try { msg = JSON.parse(ev.data); } catch { return; }
+          if (msg.type === "registered") { setStatus("Bridge connected · waiting for agent", true); log("registered " + fmt(code)); }
+          else if (msg.type === "error") {
+            log("bridge: " + msg.message);
+            if (msg.code === "code_in_use") { code = newCode(); toSandbox({ type: "storage_set", key: "pairingCode", value: code }); showCode(); connect(); }
+          }
+          else if (msg.type === "peer_left") log("agent disconnected");
+          else if (msg.type === "request") {
+            setStatus("Agent connected", true);
+            log("→ " + msg.method);
+            toSandbox({ type: "rpc", id: msg.id, method: msg.method, params: msg.params });
+          }
+        };
+        ws.onclose = () => {
+          setStatus("Bridge offline · start your MCP server (npx @figma-studio/mcp-server)", false);
+          reconnectTimer = setTimeout(connect, backoff);
+          backoff = Math.min(backoff * 2, 10000);
+        };
+      }
+
+      window.onmessage = (ev) => {
+        const msg = ev.data && ev.data.pluginMessage;
+        if (!msg) return;
+        if (msg.type === "init") {
+          fileName = msg.fileName || "";
+          port = msg.port || 3055;
+          $("port").value = port;
+          code = msg.pairingCode;
+          if (!code || code.length !== 8) { code = newCode(); toSandbox({ type: "storage_set", key: "pairingCode", value: code }); }
+          showCode();
+          connect();
+        } else if (msg.type === "rpc_result") {
+          send({ type: "response", id: msg.id, result: msg.result, error: msg.error });
+          log((msg.error ? "✗ " + msg.error.message : "✓ done").slice(0, 120));
+        } else if (msg.type === "progress") {
+          send({ type: "progress", id: msg.id, done: msg.done, total: msg.total, message: msg.message });
+        }
+      };
+
+      $("copy").onclick = () => {
+        const text = fmt(code);
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); log("copied " + text); } catch { /* user can select the code manually */ }
+        ta.remove();
+      };
+      $("regen").onclick = () => {
+        code = newCode();
+        toSandbox({ type: "storage_set", key: "pairingCode", value: code });
+        showCode();
+        log("new pairing code — previous agents must re-pair");
+        connect();
+      };
+      $("port").onchange = () => {
+        const p = Number($("port").value);
+        if (p >= 1024 && p <= 65535) { port = p; toSandbox({ type: "storage_set", key: "bridgePort", value: p }); connect(); }
+      };
+
+      toSandbox({ type: "ui_ready" });
+    </script>
+  </body>
+</html>

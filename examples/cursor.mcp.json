@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "figma-studio": {
+      "command": "npx",
+      "args": ["-y", "@figma-studio/mcp-server"]
+    }
+  }
+}

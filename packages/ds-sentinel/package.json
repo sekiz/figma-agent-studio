@@ -1,0 +1,35 @@
+{
+  "name": "@figma-studio/ds-sentinel",
+  "version": "0.1.0",
+  "description": "Design-system component matching, token audit and WCAG contrast for figma-agent-studio.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@figma-studio/shared-types": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sekiz/figma-agent-studio.git",
+    "directory": "packages/ds-sentinel"
+  },
+  "homepage": "https://github.com/sekiz/figma-agent-studio#readme",
+  "bugs": {
+    "url": "https://github.com/sekiz/figma-agent-studio/issues"
+  }
+}

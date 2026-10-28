@@ -1,0 +1,28 @@
+{
+  "name": "@figma-studio/figma-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma canvas plugin for figma-agent-studio: executes mutation plans sent by MCP agents through the local bridge.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@figma-studio/shared-types": "workspace:*",
+    "@figma/plugin-typings": "^1.142.0",
+    "esbuild": "^0.25.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sekiz/figma-agent-studio.git",
+    "directory": "packages/figma-plugin"
+  },
+  "homepage": "https://github.com/sekiz/figma-agent-studio#readme",
+  "bugs": {
+    "url": "https://github.com/sekiz/figma-agent-studio/issues"
+  }
+}
