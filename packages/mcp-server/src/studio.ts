@@ -106,6 +106,26 @@ export class Studio {
     this.dsIndex?.components.push(component);
   }
 
+  /**
+   * Resolves the layer a tool acts on: an explicit id, or the single selected layer. Saves the agent
+   * a separate selection round-trip on every call.
+   */
+  async target(nodeId?: string): Promise<string> {
+    if (nodeId) {
+      if (!/^I?\d+[:;-]\d+(;\d+:\d+)*$/.test(nodeId)) throw new Error(`"${nodeId}" isn't a Figma layer id. Ids look like "123:456"; get them from figma_inspect, or omit nodeId to use the selection.`);
+      return nodeId.replace("-", ":");
+    }
+    const sel = await this.figma.request("get_selection", {});
+    if (sel.length === 1) return sel[0]!.id;
+    if (sel.length === 0) throw new Error("Nothing is selected in Figma. Ask the designer to select one frame, or pass nodeId.");
+    throw new Error(
+      `${sel.length} layers are selected; pass nodeId for one of them: ${sel
+        .slice(0, 8)
+        .map((n) => `${n.id} "${n.name}"`)
+        .join(", ")}${sel.length > 8 ? ", …" : ""}.`,
+    );
+  }
+
   private apply(plan: MutationPlan): Promise<ApplyPlanResult> {
     return this.figma.request("apply_plan", plan, PLAN_TIMEOUT);
   }
@@ -115,13 +135,14 @@ export class Studio {
   // -------------------------------------------------------------------------
 
   async transpose(input: {
-    sourceNodeId: string;
+    sourceNodeId?: string;
     targetSurfaces: Surface[];
     enforceDesignSystem?: boolean;
     placeBesideSource?: boolean;
     overrides?: SurfaceOverrides;
   }) {
-    const [source, ds] = await Promise.all([this.figma.request("snapshot", { nodeId: input.sourceNodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
+    const sourceNodeId = await this.target(input.sourceNodeId);
+    const [source, ds] = await Promise.all([this.figma.request("snapshot", { nodeId: sourceNodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
     const resolver = createResolver(ds);
     const surfaceContainer = findVariable(ds, "COLOR", /surface[\s/_-]*container/i);
     const results = [];
@@ -163,7 +184,7 @@ export class Studio {
         decisions,
       });
     }
-    return results;
+    return { source: { id: source.id, name: source.name }, results };
   }
 
   async resolveDecision(decisionId: string, choice: DecisionChoice, candidateIndex = 0) {
@@ -206,8 +227,9 @@ export class Studio {
   // Module 3: RTLMatrix
   // -------------------------------------------------------------------------
 
-  async mirrorRtl(input: { nodeId: string; targetLanguage?: RtlLanguage; swapDirectionalIcons?: boolean; createDuplicate?: boolean }) {
-    const [source, ds] = await Promise.all([this.figma.request("snapshot", { nodeId: input.nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
+  async mirrorRtl(input: { nodeId?: string; targetLanguage?: RtlLanguage; swapDirectionalIcons?: boolean; createDuplicate?: boolean }) {
+    const nodeId = await this.target(input.nodeId);
+    const [source, ds] = await Promise.all([this.figma.request("snapshot", { nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
     const rtl = planRtl(source, {
       targetLanguage: input.targetLanguage,
       swapDirectionalIcons: input.swapDirectionalIcons,
@@ -237,8 +259,9 @@ export class Studio {
   // Module 2: DS-Sentinel audit
   // -------------------------------------------------------------------------
 
-  async audit(input: { nodeId: string; autoFixSafeTokens?: boolean }): Promise<{ report: AuditReport; fixed: number; fixWarnings: string[] }> {
-    const [root, ds] = await Promise.all([this.figma.request("snapshot", { nodeId: input.nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
+  async audit(input: { nodeId?: string; autoFixSafeTokens?: boolean }): Promise<{ report: AuditReport; fixed: number; fixWarnings: string[] }> {
+    const nodeId = await this.target(input.nodeId);
+    const [root, ds] = await Promise.all([this.figma.request("snapshot", { nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
     const report = auditDesignSystem(root, ds);
     if (!input.autoFixSafeTokens || !report.fixPlan) return { report, fixed: 0, fixWarnings: [] };
     const applied = await this.apply(report.fixPlan);
@@ -249,11 +272,12 @@ export class Studio {
   // Module 4: DevSpec
   // -------------------------------------------------------------------------
 
-  async handoff(input: { nodeId: string; targetStack: TargetStack; renderOnCanvas?: boolean }) {
-    const [root, ds] = await Promise.all([this.figma.request("snapshot", { nodeId: input.nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
+  async handoff(input: { nodeId?: string; targetStack: TargetStack; renderOnCanvas?: boolean }) {
+    const nodeId = await this.target(input.nodeId);
+    const [root, ds] = await Promise.all([this.figma.request("snapshot", { nodeId }, { timeoutMs: 60_000 }), this.designSystem()]);
     const spec = buildHandoff(root, ds, input.targetStack);
-    const sectionId = input.renderOnCanvas === false ? undefined : (await this.figma.request("render_handoff", { nodeId: input.nodeId, spec }, PLAN_TIMEOUT)).sectionId;
-    return { sectionId, markdown: handoffToMarkdown(spec), tokens: spec.ledger.length };
+    const sectionId = input.renderOnCanvas === false ? undefined : (await this.figma.request("render_handoff", { nodeId, spec }, PLAN_TIMEOUT)).sectionId;
+    return { sectionId, title: spec.title, markdown: handoffToMarkdown(spec), tokens: spec.ledger.length, notes: spec.notes.length, codeLines: spec.code.text.split("\n").length, language: spec.code.language };
   }
 }
 

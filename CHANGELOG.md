@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — 2026-10-28
+
+Token efficiency and workflow prompts.
+
+- Core toolset reduced to 8 consolidated tools (≈1,880 tokens of definitions, against ≈6,470 for a 40-tool primitive server). `FIGMA_STUDIO_TOOLSET=full` restores the design-system listing and low-level primitives.
+- `figma_status`, `figma_get_selection` and `figma_get_node` are merged into `figma_connect` (with no code it reports status) and `figma_inspect`.
+- `nodeId` / `sourceNodeId` are optional everywhere; tools act on the current selection, and ask which layer to use when several are selected.
+- Results are plain text with `detail: "concise" | "detailed"`. Transpose results shrink from ≈2,450 to ≈410 tokens and handoff results from ≈920 to ≈30.
+- Repeated warnings are grouped across layers and surfaces.
+- Five MCP prompts (slash commands): `adapt_screen`, `localize_rtl`, `audit_and_fix`, `dev_handoff`, `ship_all_platforms`.
+- Rewritten tool descriptions and server instructions; actionable error hints for every bridge error code.
+- Token budgets enforced in CI.
+
 ## 0.1.0 — 2026-10-28
 
 First public alpha.

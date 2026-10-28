@@ -1,6 +1,6 @@
 {
   "name": "@figma-studio/surface-engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pure multi-surface layout math (iOS, Android M3, Smart TV, Tablet) for figma-agent-studio.",
   "license": "MIT",
   "type": "module",

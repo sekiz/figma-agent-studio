@@ -67,7 +67,7 @@ describe.skipIf(!existsSync(bundle))("stdio bundle end-to-end", () => {
     expect(res.isError).toBeFalsy();
     const body = JSON.stringify(res.content);
     expect(body).toContain("Smart TV");
-    expect(body).toContain("ACTION REQUIRED");
+    expect(body).toContain("DECISIONS NEEDED");
     expect(plans).toHaveLength(1);
   }, 20_000);
 });

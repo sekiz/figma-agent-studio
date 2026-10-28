@@ -4,7 +4,7 @@
 
 Masaüstü ekranını seçip ajana söylediğinizde, platform kurallarına uygun **iOS**, **Android (Material 3)**, **Smart TV (10-foot UI)** ve **Tablet** versiyonlarını üretir. Ekranları **RTL'e (Arapça/İbranice)** aynalar, **Design System'e göre denetler** ve kanvasa **geliştirici handoff'u** yazar. Bunları yaparken sizin komponentlerinizi ve token'larınızı kullanır. Bir komponent eksikse kafasına göre kutu çizmez; fuşya bir bayrak açar ve size sorar.
 
-> **Durum: 0.1 (alfa).** Motorlar, köprü, MCP sunucusu ve plugin'in plan uygulayıcısı 160 otomatik testle doğrulandı (Figma Plugin API'sinin katı bir sahte sürümü dahil). Plugin henüz gerçek Figma masaüstü uygulamasında geniş kapsamlı test edilmedi; farklı davranan bir şey görürseniz lütfen issue açın.
+> **Durum: 0.2 (alfa).** Motorlar, köprü, MCP sunucusu ve plugin'in plan uygulayıcısı 166 otomatik testle doğrulandı (Figma Plugin API'sinin katı bir sahte sürümü dahil). Plugin henüz gerçek Figma masaüstü uygulamasında geniş kapsamlı test edilmedi; farklı davranan bir şey görürseniz lütfen issue açın.
 
 ## Kurulum (yaklaşık 60 saniye)
 
@@ -23,5 +23,16 @@ Masaüstü ekranını seçip ajana söylediğinizde, platform kurallarına uygun
 | `figma_mirror_rtl` | Satırları ters çevirir ve hizalamayı çevirir, padding'leri takas eder, yönlü ikonları flip eder. Telefon, URL, fiyat ve kod LTR kalır. İstenirse metinleri ajan çevirir. |
 | `figma_audit_design_system` | Detached komponent, token'a eşit hardcoded renk, palet dışı renk, grid dışı boşluk ve WCAG AA kontrastı kontrol eder. Güvenli düzeltmeleri otomatik bağlayabilir. |
 | `figma_generate_dev_handoff` | Token tablosu, responsive notlar ve SwiftUI / Compose / React-Tailwind / RN kod iskeletini içeren bir `[HANDOFF]` section'ı oluşturur. |
+
+## Token verimliliği
+
+- **Az ve birleşik tool:** Varsayılan sette 8 tool var (`FIGMA_STUDIO_TOOLSET=full` ile 12). cursor-talk-to-figma 40 tool tanımlıyor ve tanımları her turda ≈6.470 token tutuyor; bizde ≈1.880.
+- **Tek çağrıda tüm iş:** Node ağacı modelin bağlamına girmez; hesaplamayı sunucu yapar. 4 platformluk bir dönüşüm (170 kanvas değişikliği) ≈410 token'lık bir yanıt döndürür.
+- **Sade metin yanıtlar:** Varsayılan `detail: "concise"`, gerektiğinde `"detailed"`. Tekrarlayan uyarılar tek satırda gruplanır.
+- **Seçim varsayılanı:** `nodeId` verilmezse seçili katman kullanılır, ayrı bir "seçimi getir" çağrısı gerekmez.
+
+## Hazır iş akışları (slash komutları)
+
+Claude Code'da `/figma-studio:adapt_screen`, `localize_rtl`, `audit_and_fix`, `dev_handoff` ve `ship_all_platforms` komutları hazır gelir. Her biri adımları, kuralları ve rapor formatını içeren profesyonel bir runbook'tur.
 
 Ayrıntılar için: [README (EN)](../README.md) · [PRD v1.1](PRD.md) · [Mimari](ARCHITECTURE.md)

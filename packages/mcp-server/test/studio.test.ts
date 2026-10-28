@@ -57,7 +57,7 @@ describe("Studio.transpose", () => {
   it("creates one frame per surface and turns missing components into decisions", async () => {
     const f = fakeFigma();
     const studio = new Studio(f.gateway);
-    const results = await studio.transpose({ sourceNodeId: "1:1", targetSurfaces: ["ios", "android_m3"] });
+    const { results } = await studio.transpose({ sourceNodeId: "1:1", targetSurfaces: ["ios", "android_m3"] });
     expect(results.map((r) => r.frameId)).toEqual(["9:1", "9:2"]);
     expect(f.plans.map((p) => p.root.mode === "clone" && p.root.slot)).toEqual([0, 1]);
 
@@ -76,7 +76,9 @@ describe("Studio.resolveDecision", () => {
   async function withDecision() {
     const f = fakeFigma();
     const studio = new Studio(f.gateway);
-    const [r] = await studio.transpose({ sourceNodeId: "1:1", targetSurfaces: ["ios"] });
+    const {
+      results: [r],
+    } = await studio.transpose({ sourceNodeId: "1:1", targetSurfaces: ["ios"] });
     return { f, studio, decision: r!.decisions[0]! };
   }
 
@@ -144,7 +146,7 @@ describe("Studio.mirrorRtl / audit / handoff", () => {
 });
 
 describe("MCP surface", () => {
-  it("exposes client-safe tool names and answers status without Figma", async () => {
+  it("exposes a small, client-safe core toolset, workflow prompts and actionable errors", async () => {
     const studio = new Studio(fakeFigma().gateway);
     const bridgeClient = new BridgeClient({ url: "ws://127.0.0.1:1", reconnect: false });
     const server = createServer(studio, bridgeClient, "ws://127.0.0.1:1");
@@ -153,38 +155,54 @@ describe("MCP surface", () => {
     await Promise.all([server.connect(a), client.connect(b)]);
 
     const { tools } = await client.listTools();
-    const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(
+    expect(tools.map((t) => t.name).sort()).toEqual(
       [
         "figma_apply_text",
         "figma_audit_design_system",
         "figma_connect",
-        "figma_create_frame",
         "figma_generate_dev_handoff",
-        "figma_get_node",
-        "figma_get_selection",
+        "figma_inspect",
         "figma_mirror_rtl",
         "figma_resolve_missing_component",
-        "figma_scan_design_system",
-        "figma_set_auto_layout",
-        "figma_set_fills",
-        "figma_status",
         "figma_transpose_surface",
       ].sort(),
     );
     // Some clients (e.g. the Claude API) only accept ^[a-zA-Z0-9_-]{1,64}$ — no dots.
-    for (const n of names) expect(n).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    for (const t of tools) expect(t.name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     expect(client.getInstructions()).toContain("figma_connect");
 
-    const status = await client.callTool({ name: "figma_status", arguments: {} });
-    expect(JSON.stringify(status.content)).toContain('\\"paired\\": false');
+    const { prompts } = await client.listPrompts();
+    expect(prompts.map((p) => p.name).sort()).toEqual(["adapt_screen", "audit_and_fix", "dev_handoff", "localize_rtl", "ship_all_platforms"]);
+    const adapt = await client.getPrompt({ name: "adapt_screen", arguments: { surfaces: "iphone, tv" } });
+    const text = (adapt.messages[0]!.content as { text: string }).text;
+    expect(text).toContain("for: ios, smart_tv_10ft.");
+    expect(text).toContain("Never pick an option for a missing design-system component yourself");
+    const rtl = await client.getPrompt({ name: "localize_rtl", arguments: { language: "he" } });
+    expect((rtl.messages[0]!.content as { text: string }).text).toContain('targetLanguage="he"');
 
-    const notPaired = await client.callTool({ name: "figma_get_selection", arguments: {} });
+    const status = await client.callTool({ name: "figma_connect", arguments: {} });
+    expect(JSON.stringify(status.content)).toContain("not paired");
+
+    const notPaired = await client.callTool({ name: "figma_inspect", arguments: {} });
     expect(notPaired.isError).toBe(true);
     expect(JSON.stringify(notPaired.content)).toContain("bridge restarts automatically");
 
-    const badId = await client.callTool({ name: "figma_get_node", arguments: { nodeId: "not-an-id" } });
+    const badId = await client.callTool({ name: "figma_inspect", arguments: { nodeId: "not-an-id" } });
     expect(badId.isError).toBe(true);
+    expect(JSON.stringify(badId.content)).toContain("isn't a Figma layer id");
     await client.close();
+  });
+});
+
+describe("selection defaults", () => {
+  it("acts on the single selected layer when nodeId is omitted", async () => {
+    const f = fakeFigma();
+    const gateway = { ...f.gateway, request: (async (m: string, p: unknown) => (m === "get_selection" ? [{ id: "7:7", name: "S", type: "FRAME" }] : f.gateway.request(m as never, p as never))) as typeof f.gateway.request };
+    await new Studio(gateway).audit({});
+    expect(f.calls.find((c) => c.method === "snapshot")?.params).toEqual({ nodeId: "7:7" });
+  });
+  it("asks which layer to use when several are selected", async () => {
+    const gateway = { request: (async () => [{ id: "1:1", name: "A", type: "FRAME" }, { id: "1:2", name: "B", type: "FRAME" }]) as never };
+    await expect(new Studio(gateway).audit({})).rejects.toThrow('2 layers are selected; pass nodeId for one of them: 1:1 "A", 1:2 "B"');
   });
 });

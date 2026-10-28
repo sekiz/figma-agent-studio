@@ -1,6 +1,6 @@
 {
   "name": "@figma-studio/figma-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Figma canvas plugin for figma-agent-studio: executes mutation plans sent by MCP agents through the local bridge.",
   "license": "MIT",

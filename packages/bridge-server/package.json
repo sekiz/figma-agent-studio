@@ -1,6 +1,6 @@
 {
   "name": "@figma-studio/bridge-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local WebSocket gateway (127.0.0.1:3055) pairing the figma-agent-studio Figma plugin with MCP agents.",
   "license": "MIT",
   "type": "module",

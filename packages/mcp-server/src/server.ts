@@ -1,38 +1,53 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { BridgeRequestError, type BridgeClient } from "@figma-studio/bridge-server";
-import { formatPairingCode, hexToRgba, PairingCodeSchema, SurfaceSchema, type NodeSnapshot } from "@figma-studio/shared-types";
-import type { Studio } from "./studio.js";
+import { BridgeRequestError } from "@figma-studio/bridge-server";
+import { formatPairingCode, hexToRgba, PairingCodeSchema, SURFACE_LABELS, SurfaceSchema } from "@figma-studio/shared-types";
+import { auditText, groupWarnings, outline, section, type Detail } from "./format.js";
+import { registerPrompts } from "./prompts.js";
+import type { FigmaGateway, Studio } from "./studio.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
-export const SERVER_INSTRUCTIONS = `figma-agent-studio drives the Figma canvas through a local plugin.
+/** The live plugin connection (BridgeClient in production). */
+export interface Connection extends FigmaGateway {
+  pair(code: string): Promise<{ fileName?: string }>;
+  readonly connected: boolean;
+  paired: boolean;
+  pluginOnline: boolean;
+  fileName: string | undefined;
+}
 
-Workflow:
-1. If any tool reports "not_paired", ask the designer to open the "Agent Studio (MCP bridge)" plugin in Figma and read you the 8-character pairing code, then call figma_connect.
-2. Use figma_get_selection to find node ids (format "123:456").
-3. High-level tools: figma_transpose_surface, figma_mirror_rtl, figma_audit_design_system, figma_generate_dev_handoff.
-4. Missing design-system components are NEVER drawn as detached shapes. When a tool returns decisions, ask the designer which option to take (A synthesize from tokens / B adapt closest variant / C keep wireframe placeholder) and call figma_resolve_missing_component with their answer. Do not choose for them unless they told you to.
-5. For RTL translation, figma_mirror_rtl returns the strings to translate; translate them yourself and call figma_apply_text.`;
+/**
+ * "core" keeps the tool list small (tool definitions are re-sent on every turn); "full" adds the
+ * design-system scan and low-level primitives for custom canvas edits.
+ */
+export type Toolset = "core" | "full";
 
-function ok(summary: string, data?: unknown): CallToolResult {
-  const text = data === undefined ? summary : `${summary}\n\n${JSON.stringify(data, null, 2)}`;
+export const SERVER_INSTRUCTIONS = `Figma DesignOps tools. Each tool does a whole job server-side and applies it to the canvas in one call, so don't rebuild layouts with many small edits.
+
+- Layer ids look like "123:456". Omit nodeId to act on the designer's current selection.
+- On "not paired": ask the designer for the 8-character code in the Agent Studio plugin window, then call figma_connect.
+- Never improvise UI for a missing design-system component. Relay each decision to the designer verbatim and call figma_resolve_missing_component with their choice.
+- Results default to detail="concise". Ask for "detailed" only when you need every item.`;
+
+function ok(text: string): CallToolResult {
   return { content: [{ type: "text", text }] };
 }
 
 function fail(e: unknown): CallToolResult {
   const err = e as Error;
-  const code = e instanceof BridgeRequestError ? ` [${e.code}]` : "";
-  let hint = "";
-  if (e instanceof BridgeRequestError && (e.code === "not_paired" || e.code === "unknown_code")) {
-    hint = "\nAsk the designer for the pairing code shown in the Figma plugin window and call figma_connect.";
-  } else if (e instanceof BridgeRequestError && (e.code === "bridge_disconnected" || e.code === "bridge_unreachable")) {
-    hint = "\nThe local bridge restarts automatically within a few seconds — retry, then pair again with the code shown in the Figma plugin if asked.";
-  } else if (e instanceof BridgeRequestError && e.code === "plugin_offline") {
-    hint = "\nAsk the designer to re-open the plugin in Figma; the session resumes automatically.";
-  }
-  return { isError: true, content: [{ type: "text", text: `Error${code}: ${err.message ?? String(e)}${hint}` }] };
+  const code = e instanceof BridgeRequestError ? e.code : "";
+  const hints: Record<string, string> = {
+    not_paired: "Ask the designer for the pairing code shown in the Agent Studio plugin window, then call figma_connect.",
+    unknown_code: "That code isn't open in any plugin window. Ask the designer to read the code again (8 characters, e.g. K7QM-2XPA).",
+    bridge_disconnected: "The local bridge restarts automatically within a few seconds. Retry, and pair again with figma_connect if asked.",
+    bridge_unreachable: "The local bridge restarts automatically within a few seconds. Retry, and pair again with figma_connect if asked.",
+    plugin_offline: "Ask the designer to re-open the Agent Studio plugin in the same file; pairing resumes automatically.",
+    timeout: "Figma is busy or the plugin window was closed. Ask the designer to keep the plugin open, then retry.",
+  };
+  const hint = hints[code] ? `\n${hints[code]}` : "";
+  return { isError: true, content: [{ type: "text", text: `Error${code ? ` [${code}]` : ""}: ${err.message ?? String(e)}${hint}` }] };
 }
 
 const wrap =
@@ -45,117 +60,273 @@ const wrap =
     }
   };
 
-const nodeId = z.string().regex(/^(I?\d+[:;-]\d+)(;\d+:\d+)*$/, "Figma node ids look like 123:456").describe("Figma node ID, e.g. '123:456' (from figma_get_selection)");
+// Id format is checked by the plugin (with an actionable error) instead of a regex repeated in every schema.
+const layerId = z.string();
+const target = layerId.optional().describe("Layer id; omit = current selection");
+const detail = z.enum(["concise", "detailed"]).default("concise");
 
-function outline(n: NodeSnapshot, depth = 0, lines: string[] = [], max = 120): string[] {
-  if (lines.length >= max) return lines;
-  const layout = n.layoutMode && n.layoutMode !== "NONE" ? ` ${n.layoutMode.toLowerCase()}` : "";
-  const text = n.type === "TEXT" ? ` "${(n.characters ?? "").slice(0, 40)}"` : "";
-  const comp = n.component?.mainComponentName ? ` ⟶ ${n.component.componentSetName ? `${n.component.componentSetName}/` : ""}${n.component.mainComponentName}` : "";
-  lines.push(`${"  ".repeat(depth)}- [${n.id}] ${n.type} "${n.name}" ${Math.round(n.width)}×${Math.round(n.height)}${layout}${comp}${text}`);
-  (n.children ?? []).forEach((c) => outline(c, depth + 1, lines, max));
-  if (n.truncatedChildren) lines.push(`${"  ".repeat(depth + 1)}… ${n.truncatedChildren} more (increase depth)`);
-  return lines;
-}
-
-export function createServer(studio: Studio, client: BridgeClient, bridgeUrl: string): McpServer {
+export function createServer(studio: Studio, conn: Connection, bridgeUrl: string, toolset: Toolset = "core"): McpServer {
   const server = new McpServer({ name: "figma-agent-studio", version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
-  // ---------------------------------------------------------------- session
+  // ------------------------------------------------------------------ session
   server.registerTool(
     "figma_connect",
     {
-      title: "Pair with the Figma plugin",
-      description: "Pairs this agent with the open Figma plugin using the 8-character code the plugin displays (e.g. 'K7QM-2XPA'). Ask the designer for the code.",
-      inputSchema: { pairingCode: z.string().describe("Code shown in the plugin window, with or without the dash") },
+      title: "Connect to Figma",
+      description:
+        "Pairs with the Agent Studio plugin using the code it displays, or reports connection status when called without a code. Call this when another tool says the session isn't paired.",
+      inputSchema: { pairingCode: z.string().optional().describe('Code from the plugin window, e.g. "K7QM-2XPA"') },
     },
     wrap(async ({ pairingCode }) => {
+      if (!pairingCode) {
+        const pending = [...studio.decisions.keys()];
+        return ok(
+          `Bridge ${bridgeUrl}: ${conn.connected ? "up" : "down"} · ${conn.paired ? `paired${conn.fileName ? ` with "${conn.fileName}"` : ""}` : "not paired"} · plugin ${conn.pluginOnline ? "online" : "offline"}` +
+            (pending.length ? ` · pending decisions: ${pending.join(", ")}` : ""),
+        );
+      }
       const code = PairingCodeSchema.parse(pairingCode);
-      const r = await client.pair(code);
+      const r = await conn.pair(code);
       studio.decisions.clear();
-      return ok(`Paired with Figma plugin ${formatPairingCode(code)}${r.fileName ? ` in file "${r.fileName}"` : ""}.`);
+      return ok(`Paired with ${formatPairingCode(code)}${r.fileName ? ` in "${r.fileName}"` : ""}.`);
     }),
   );
 
   server.registerTool(
-    "figma_status",
-    { title: "Connection status", description: "Shows whether the local bridge and Figma plugin are connected.", inputSchema: {}, annotations: { readOnlyHint: true } },
-    wrap(async () =>
-      ok("Status", { bridge: bridgeUrl, bridgeConnected: client.connected, paired: client.paired, pluginOnline: client.pluginOnline, fileName: client.fileName, pendingDecisions: [...studio.decisions.keys()] }),
-    ),
-  );
-
-  // ---------------------------------------------------------------- read
-  server.registerTool(
-    "figma_get_selection",
-    { title: "Get selection", description: "Returns the layers currently selected in Figma (ids, names, sizes) plus file and page names.", inputSchema: {}, annotations: { readOnlyHint: true } },
-    wrap(async () => {
-      const info = await client.request("get_document_info", {});
-      return ok(info.selection.length ? `${info.selection.length} layer(s) selected on page "${info.pageName}".` : `Nothing selected on page "${info.pageName}". Ask the designer to select a frame.`, info);
-    }),
-  );
-
-  server.registerTool(
-    "figma_get_node",
+    "figma_inspect",
     {
-      title: "Inspect a node",
-      description: "Returns a layer tree outline (ids, types, sizes, Auto-Layout, component links, text). Set raw=true for the full JSON snapshot.",
-      inputSchema: { nodeId, depth: z.number().int().min(0).max(50).default(3), raw: z.boolean().default(false) },
+      title: "Inspect layers",
+      description:
+        "Returns a compact layer outline: one line per layer with id, type, name, size, Auto-Layout, linked component and text. Without nodeId it describes the current selection. Use it to find ids or to understand structure before acting.",
+      inputSchema: {
+        nodeId: target,
+        depth: z.number().int().min(0).max(20).default(3).describe("Levels below the layer (default 3)"),
+        maxLines: z.number().int().min(10).max(400).default(80),
+      },
       annotations: { readOnlyHint: true },
     },
-    wrap(async ({ nodeId, depth, raw }) => {
-      const snap = await client.request("snapshot", { nodeId, depth });
-      return raw ? ok(`Snapshot of "${snap.name}"`, snap) : ok(outline(snap).join("\n"));
+    wrap(async ({ nodeId, depth, maxLines }) => {
+      if (nodeId) nodeId = await studio.target(nodeId);
+      if (!nodeId) {
+        const info = await conn.request("get_document_info", {});
+        if (info.selection.length !== 1) {
+          const list = info.selection.map((n) => `${n.id} ${n.type} "${n.name}" ${Math.round(n.width ?? 0)}×${Math.round(n.height ?? 0)}`);
+          return ok(`File "${info.fileName}", page "${info.pageName}": ${info.selection.length ? `${info.selection.length} layers selected` : "nothing selected; ask the designer to select a frame"}.${section("", list)}`);
+        }
+        nodeId = info.selection[0]!.id;
+      }
+      return ok(outline(await conn.request("snapshot", { nodeId, depth }), maxLines));
     }),
   );
 
+  // ------------------------------------------------------------------ Module 1
+  server.registerTool(
+    "figma_transpose_surface",
+    {
+      title: "Adapt a screen to other devices",
+      description:
+        "Clones a desktop/web frame into platform-accurate frames for iOS (393pt), Android Material 3 (412dp), Smart TV 10-foot (1920×1080) and/or Tablet (834pt). It reflows Auto-Layout, wraps grids, scales type, adds safe areas and swaps navigation to design-system components, all in one call. Missing components come back as decisions to put to the designer.",
+      inputSchema: {
+        sourceNodeId: target,
+        targetSurfaces: z.array(SurfaceSchema).min(1),
+        enforceDesignSystem: z.boolean().default(true).describe("false = use the closest variant instead of asking"),
+        placeBesideSource: z.boolean().default(true),
+        androidNavigation: z.enum(["three_button", "gesture"]).optional(),
+        tvOverscan: z.object({ horizontal: z.number().min(0), vertical: z.number().min(0) }).optional().describe("Default 80px every edge"),
+        detail,
+      },
+    },
+    wrap(async ({ sourceNodeId, targetSurfaces, enforceDesignSystem, placeBesideSource, androidNavigation, tvOverscan, detail }) => {
+      const { source, results } = await studio.transpose({ sourceNodeId, targetSurfaces, enforceDesignSystem, placeBesideSource, overrides: { androidNavigation, tvOverscan } });
+      const full = detail === "detailed";
+      const frames = results.map((r) => {
+        const used = full && r.usedComponents.length ? ` · uses ${r.usedComponents.map((u) => u.name).join(", ")}` : ` · ${r.usedComponents.length} DS components`;
+        return `${r.label} → ${r.frameId}${used}${r.decisions.length ? ` · ${r.decisions.length} missing` : ""}`;
+      });
+      const warnings = results.flatMap((r) => r.warnings.map((text) => ({ text, scope: SURFACE_LABELS[r.surface] })));
+      const decisions = results.flatMap((r) => r.decisions);
+      const asks = decisions.map((d) => {
+        const alts = d.candidates.slice(0, full ? 3 : 1).map((c, i) => `${full ? `[${i}] ` : ""}"${c.name}"`);
+        return `${d.decisionId} · ${SURFACE_LABELS[d.surface]} "${d.label}": A) synthesize from tokens  B) adapt ${alts.length ? alts.join(" / ") : "(no close variant)"}  C) wireframe placeholder`;
+      });
+      return ok(
+        `Adapted "${source.name}" (${source.id}) to ${results.length} surface(s).` +
+          section("Frames", frames) +
+          section("Warnings", full ? warnings.map((w) => `${w.scope}: ${w.text}`) : groupWarnings(warnings)) +
+          (asks.length ? section(`DECISIONS NEEDED: ask the designer, then call figma_resolve_missing_component(decisionId, choice)`, asks) : ""),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "figma_resolve_missing_component",
+    {
+      title: "Apply the designer's decision",
+      description:
+        "Applies the designer's answer for a missing design-system component reported by figma_transpose_surface. A=synthesize a token-bound master component, B=variant_fallback (closest existing variant), C=placeholder (named wireframe). Only call it with the designer's own choice.",
+      inputSchema: {
+        decisionId: z.string(),
+        choice: z.enum(["synthesize", "variant_fallback", "placeholder"]),
+        candidateIndex: z.number().int().min(0).default(0).describe("Variant to use for variant_fallback"),
+      },
+    },
+    wrap(async ({ decisionId, choice, candidateIndex }) => {
+      const r = await studio.resolveDecision(decisionId, choice, candidateIndex);
+      return ok(`${r.outcome}${r.remainingDecisions.length ? `\nStill pending: ${r.remainingDecisions.join(", ")}` : "\nNo decisions pending."}`);
+    }),
+  );
+
+  // ------------------------------------------------------------------ Module 3
+  server.registerTool(
+    "figma_mirror_rtl",
+    {
+      title: "Mirror a screen to RTL",
+      description:
+        "Creates a Right-to-Left version of a frame. It reverses rows and flips their alignment, swaps padding, inverts text alignment, mirrors directional icons and absolute layers, and keeps phone numbers, URLs, numbers and code LTR. With targetLanguage it returns the strings to translate as `id|text` lines; translate them and send them back with figma_apply_text.",
+      inputSchema: {
+        nodeId: target,
+        targetLanguage: z.enum(["ar", "he", "none"]).default("none"),
+        swapDirectionalIcons: z.boolean().default(true),
+        createDuplicate: z.boolean().default(true).describe("false = mirror in place"),
+        detail,
+      },
+    },
+    wrap(async ({ detail, ...args }) => {
+      const r = await studio.mirrorRtl(args);
+      const s = r.stats;
+      const stats = [
+        s.reversedContainers && `${s.reversedContainers} rows reversed`,
+        s.alignmentFlips && `${s.alignmentFlips} alignments flipped`,
+        s.paddingSwaps && `${s.paddingSwaps} paddings swapped`,
+        s.textAlignmentFlips && `${s.textAlignmentFlips} text alignments`,
+        s.iconsFlipped + s.iconsSwapped && `${s.iconsFlipped + s.iconsSwapped} icons mirrored`,
+        s.mirroredPositions && `${s.mirroredPositions} absolute layers`,
+        s.shieldedTexts + s.shieldedContainers && `${s.shieldedTexts + s.shieldedContainers} kept LTR`,
+      ].filter(Boolean);
+      const shielded = detail === "detailed" ? section("Kept LTR", r.shielded.map((x) => `"${x.name}" (${x.reason})`)) : "";
+      const lang = args.targetLanguage === "ar" ? "Arabic" : "Hebrew";
+      const translate = r.toTranslate.length
+        ? `\n\nTRANSLATE to natural ${lang} UI copy (keep numbers/placeholders), then call figma_apply_text with {nodeId, characters} per line:\n` +
+          r.toTranslate.map((t) => `${t.nodeId}|${t.characters.replace(/\n/g, "\\n")}`).join("\n")
+        : "";
+      return ok(`RTL frame ${r.frameId}: ${stats.join(", ") || "nothing to mirror"}.${section("Warnings", detail === "detailed" ? r.warnings : groupWarnings(r.warnings))}${shielded}${translate}`);
+    }),
+  );
+
+  server.registerTool(
+    "figma_apply_text",
+    {
+      title: "Write text layers",
+      description: "Writes new text into text layers in one batch (fonts load first; missing fonts fall back to Inter). Use it to apply translations from figma_mirror_rtl.",
+      inputSchema: { updates: z.array(z.object({ nodeId: layerId, characters: z.string() })).min(1).max(2000) },
+    },
+    wrap(async ({ updates }) => {
+      const r = await studio.applyText(updates);
+      return ok(`Updated ${r.updated}/${updates.length} text layers.${section("Warnings", groupWarnings(r.warnings))}`);
+    }),
+  );
+
+  // ------------------------------------------------------------------ Module 2
+  server.registerTool(
+    "figma_audit_design_system",
+    {
+      title: "Audit against the design system",
+      description:
+        "Scores a frame (0-100) against the file's design system. It flags detached components, hardcoded colors that match a variable, off-palette colors, off-grid spacing, unbound spacing tokens and WCAG AA text contrast. autoFixSafeTokens=true binds exact-match values to their variables; nothing else is changed.",
+      inputSchema: { nodeId: target, autoFixSafeTokens: z.boolean().default(false), detail },
+    },
+    wrap(async ({ detail, ...args }) => {
+      const { report, fixed, fixWarnings } = await studio.audit(args);
+      return ok(auditText(report, detail as Detail, args.autoFixSafeTokens ? fixed : null) + section("Fix warnings", groupWarnings(fixWarnings)));
+    }),
+  );
+
+  // ------------------------------------------------------------------ Module 4
+  server.registerTool(
+    "figma_generate_dev_handoff",
+    {
+      title: "Generate developer handoff",
+      description:
+        'Adds a "[HANDOFF] <screen> - <platform>" section under the frame. It contains a token ledger (CSS var, Tailwind v4, native), responsive notes and a code scaffold for the chosen stack. detail="detailed" also returns the full handoff as Markdown (ledger plus code) for use outside Figma.',
+      inputSchema: {
+        nodeId: target,
+        targetStack: z.enum(["react_tailwind", "swiftui", "jetpack_compose", "react_native"]),
+        renderOnCanvas: z.boolean().default(true),
+        detail,
+      },
+    },
+    wrap(async ({ detail, ...args }) => {
+      const r = await studio.handoff(args);
+      const head = r.sectionId
+        ? `Created ${r.title} (${r.sectionId}): ${r.tokens} ledger rows, ${r.notes} responsive notes, ${r.codeLines}-line ${r.language} scaffold.`
+        : `${r.title}: ${r.tokens} ledger rows, ${r.notes} notes.`;
+      return ok(detail === "detailed" || !r.sectionId ? `${head}\n\n${r.markdown}` : head);
+    }),
+  );
+
+  if (toolset === "full") registerFullTools(server, studio, conn);
+  registerPrompts(server);
+  return server;
+}
+
+/** Optional tools: design-system listing and low-level primitives for custom edits. */
+function registerFullTools(server: McpServer, studio: Studio, conn: Connection): void {
   server.registerTool(
     "figma_scan_design_system",
     {
-      title: "Scan design system",
-      description: "Indexes the file's components, variables and paint styles (plus team-library components when FIGMA_ACCESS_TOKEN and FIGMA_LIBRARY_FILE_KEYS are set). Cached for 5 minutes.",
-      inputSchema: { refresh: z.boolean().default(false) },
+      title: "List the design system",
+      description: "Lists the components and variables the engines can use: local ones, plus team-library components when FIGMA_ACCESS_TOKEN and FIGMA_LIBRARY_FILE_KEYS are set. The result is cached for 5 minutes.",
+      inputSchema: { refresh: z.boolean().default(false), query: z.string().optional().describe("Filter names (case-insensitive)"), limit: z.number().int().min(1).max(500).default(40) },
       annotations: { readOnlyHint: true },
     },
-    wrap(async ({ refresh }) => {
+    wrap(async ({ refresh, query, limit }) => {
       const ds = await studio.designSystem(refresh);
-      const local = ds.components.filter((c) => c.source === "local").length;
-      return ok(`Design system: ${ds.components.length} components (${local} local, ${ds.components.length - local} library), ${ds.variables.length} variables, ${ds.paintStyles.length} paint styles.`, {
-        sampleComponents: ds.components.slice(0, 40).map((c) => (c.componentSetName ? `${c.componentSetName} / ${c.name}` : c.name)),
-        sampleVariables: ds.variables.slice(0, 40).map((v) => `${v.name} (${v.resolvedType})`),
-      });
+      const q = query?.toLowerCase();
+      const comps = ds.components.map((c) => (c.componentSetName ? `${c.componentSetName} / ${c.name}` : c.name)).filter((n) => !q || n.toLowerCase().includes(q));
+      const vars = ds.variables.map((v) => `${v.name} (${v.resolvedType.toLowerCase()})`).filter((n) => !q || n.toLowerCase().includes(q));
+      const more = (all: string[]) => (all.length > limit ? [`…${all.length - limit} more (narrow with query)`] : []);
+      return ok(
+        `${ds.components.length} components, ${ds.variables.length} variables, ${ds.paintStyles.length} paint styles${q ? ` · filter "${query}"` : ""}.` +
+          section(`Components (${comps.length})`, [...comps.slice(0, limit), ...more(comps)]) +
+          section(`Variables (${vars.length})`, [...vars.slice(0, limit), ...more(vars)]),
+      );
     }),
   );
 
-  // ---------------------------------------------------------------- raw mutations
-  const rgba = z.string().regex(/^#?[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/).describe("Hex color, e.g. #1E293B");
+  const hex = z.string().regex(/^#?[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/).describe("Hex, e.g. #1E293B");
   server.registerTool(
     "figma_create_frame",
     {
-      title: "Create frame",
-      description: "Low-level: creates an empty frame. Prefer high-level tools and design-system components.",
-      inputSchema: { name: z.string(), width: z.number().positive(), height: z.number().positive(), x: z.number().optional(), y: z.number().optional(), parentId: nodeId.optional(), fill: rgba.optional() },
+      title: "Create frame (low-level)",
+      description: "Creates an empty frame. Prefer the high-level tools and design-system components.",
+      inputSchema: { name: z.string(), width: z.number().positive(), height: z.number().positive(), x: z.number().optional(), y: z.number().optional(), parentId: layerId.optional(), fill: hex.optional() },
     },
-    wrap(async ({ fill, ...p }) => ok("Frame created", await client.request("create_frame", { ...p, fill: fill ? hexToRgba(fill) : undefined }))),
+    wrap(async ({ fill, ...p }) => {
+      const n = await conn.request("create_frame", { ...p, fill: fill ? hexToRgba(fill) : undefined });
+      return ok(`Created ${n.id} "${n.name}".`);
+    }),
   );
 
   server.registerTool(
     "figma_set_fills",
     {
-      title: "Set fill",
-      description: "Low-level: sets a single solid fill. Pass variableId to bind a color variable (preferred over raw hex).",
-      inputSchema: { nodeId, color: rgba.optional(), variableId: z.string().optional() },
+      title: "Set fill (low-level)",
+      description: "Sets one solid fill. Pass variableId to bind a color variable (preferred over a raw hex value).",
+      inputSchema: { nodeId: layerId, color: hex.optional(), variableId: z.string().optional() },
     },
-    wrap(async ({ nodeId, color, variableId }) => ok("Fill set", await client.request("set_fills", { nodeId, color: color ? hexToRgba(color) : undefined, variableId }))),
+    wrap(async ({ nodeId, color, variableId }) => {
+      const n = await conn.request("set_fills", { nodeId, color: color ? hexToRgba(color) : undefined, variableId });
+      return ok(`Fill set on ${n.id}.`);
+    }),
   );
 
   server.registerTool(
     "figma_set_auto_layout",
     {
-      title: "Set Auto-Layout",
-      description: "Low-level: sets Auto-Layout direction, spacing, padding and alignment on a frame.",
+      title: "Set Auto-Layout (low-level)",
+      description: "Sets a frame's Auto-Layout direction, gap, padding, alignment and wrap.",
       inputSchema: {
-        nodeId,
+        nodeId: layerId,
         layoutMode: z.enum(["NONE", "HORIZONTAL", "VERTICAL"]),
         itemSpacing: z.number().optional(),
         padding: z.object({ top: z.number().optional(), right: z.number().optional(), bottom: z.number().optional(), left: z.number().optional() }).optional(),
@@ -164,141 +335,9 @@ export function createServer(studio: Studio, client: BridgeClient, bridgeUrl: st
         layoutWrap: z.enum(["NO_WRAP", "WRAP"]).optional(),
       },
     },
-    wrap(async (p) => ok("Auto-Layout set", await client.request("set_auto_layout", p))),
-  );
-
-  // ---------------------------------------------------------------- Module 1
-  server.registerTool(
-    "figma_transpose_surface",
-    {
-      title: "Transpose to device surfaces",
-      description:
-        "Transposes a source frame (typically 1440px desktop) into iOS (393pt), Android M3 (412dp), Smart TV 10-foot (1920×1080) and/or Tablet (834pt) frames: reflows Auto-Layout, wraps grids, injects safe areas and swaps navigation to design-system components. Missing components produce decisions you must ask the designer about.",
-      inputSchema: {
-        sourceNodeId: nodeId,
-        targetSurfaces: z.array(SurfaceSchema).min(1).describe("ios | android_m3 | smart_tv_10ft | tablet"),
-        enforceDesignSystem: z.boolean().default(true).describe("Flag missing DS components and ask instead of improvising"),
-        placeBesideSource: z.boolean().default(true),
-        androidNavigation: z.enum(["three_button", "gesture"]).optional(),
-        tvOverscan: z.object({ horizontal: z.number().min(0), vertical: z.number().min(0) }).optional().describe("Default 80px on every edge"),
-      },
-    },
-    wrap(async ({ sourceNodeId, targetSurfaces, enforceDesignSystem, placeBesideSource, androidNavigation, tvOverscan }) => {
-      const results = await studio.transpose({ sourceNodeId, targetSurfaces, enforceDesignSystem, placeBesideSource, overrides: { androidNavigation, tvOverscan } });
-      const decisions = results.flatMap((r) => r.decisions);
-      const lines = results.map((r) => `• ${r.label} → frame ${r.frameId} (${r.opsApplied} ops, ${r.usedComponents.length} DS components${r.decisions.length ? `, ${r.decisions.length} missing` : ""})`);
-      let summary = `Created ${results.length} frame(s):\n${lines.join("\n")}`;
-      if (decisions.length) {
-        summary +=
-          `\n\nACTION REQUIRED — ${decisions.length} design-system component(s) are missing and were flagged in fuchsia on the canvas. ` +
-          `Ask the designer, for each one, which option to use, then call figma_resolve_missing_component:\n` +
-          decisions
-            .map(
-              (d) =>
-                `- ${d.decisionId}: "${d.label}" for ${d.surface}. Options: A) synthesize a new master component from tokens, ` +
-                `B) adapt closest variant${d.candidates[0] ? ` ("${d.candidates[0].name}")` : " (none available)"}, C) keep a wireframe placeholder.`,
-            )
-            .join("\n");
-      }
-      return ok(summary, { status: decisions.length ? "needs_decision" : "done", results });
+    wrap(async (p) => {
+      const n = await conn.request("set_auto_layout", p);
+      return ok(`Auto-Layout set on ${n.id}.`);
     }),
   );
-
-  server.registerTool(
-    "figma_resolve_missing_component",
-    {
-      title: "Resolve a missing component",
-      description: "Applies the designer's choice for a missing design-system component flagged by figma_transpose_surface.",
-      inputSchema: {
-        decisionId: z.string(),
-        choice: z.enum(["synthesize", "variant_fallback", "placeholder"]).describe("A = synthesize, B = variant_fallback, C = placeholder"),
-        candidateIndex: z.number().int().min(0).default(0).describe("Which candidate to use for variant_fallback"),
-      },
-    },
-    wrap(async ({ decisionId, choice, candidateIndex }) => {
-      const r = await studio.resolveDecision(decisionId, choice, candidateIndex);
-      return ok(r.outcome, { remainingDecisions: r.remainingDecisions });
-    }),
-  );
-
-  // ---------------------------------------------------------------- Module 3
-  server.registerTool(
-    "figma_mirror_rtl",
-    {
-      title: "Mirror to RTL",
-      description:
-        "Zero-loss Right-to-Left mirroring: reverses horizontal Auto-Layout, swaps padding, flips text alignment and directional icons, mirrors absolute positions, and shields phone numbers, URLs, numbers and code. With targetLanguage it also returns the strings for you to translate.",
-      inputSchema: {
-        nodeId,
-        targetLanguage: z.enum(["ar", "he", "none"]).default("none"),
-        swapDirectionalIcons: z.boolean().default(true),
-        createDuplicate: z.boolean().default(true).describe("Keep the LTR original and mirror a clone"),
-      },
-    },
-    wrap(async (args) => {
-      const r = await studio.mirrorRtl(args);
-      const s = r.stats;
-      let summary =
-        `Mirrored to RTL → frame ${r.frameId}: ${s.reversedContainers} rows reversed, ${s.alignmentFlips} alignments flipped, ${s.paddingSwaps} paddings swapped, ` +
-        `${s.textAlignmentFlips} text alignments flipped, ${s.iconsFlipped + s.iconsSwapped} icons mirrored, ${s.mirroredPositions} absolute layers repositioned, ` +
-        `${s.shieldedTexts + s.shieldedContainers} layers shielded.`;
-      if (r.toTranslate.length) {
-        summary += `\n\nNEXT STEP: translate the ${r.toTranslate.length} strings below into ${args.targetLanguage === "ar" ? "Arabic" : "Hebrew"} (natural UI copy, keep placeholders/numbers), then call figma_apply_text with [{nodeId, characters}].`;
-      }
-      return ok(summary, { warnings: r.warnings, shielded: r.shielded, toTranslate: r.toTranslate });
-    }),
-  );
-
-  server.registerTool(
-    "figma_apply_text",
-    {
-      title: "Write text",
-      description: "Writes text into text layers (fonts are loaded first; missing fonts fall back to Inter). Used after translating figma_mirror_rtl output.",
-      inputSchema: { updates: z.array(z.object({ nodeId, characters: z.string() })).min(1) },
-    },
-    wrap(async ({ updates }) => {
-      const r = await studio.applyText(updates);
-      return ok(`Updated ${r.updated}/${updates.length} text layers.`, r.warnings.length ? { warnings: r.warnings } : undefined);
-    }),
-  );
-
-  // ---------------------------------------------------------------- Module 2
-  server.registerTool(
-    "figma_audit_design_system",
-    {
-      title: "Audit against the design system",
-      description: "Audits a frame for detached components, hardcoded colors that match variables, off-palette colors, off-grid spacing, unbound spacing tokens and WCAG AA text contrast. autoFixSafeTokens binds identical values to their variables.",
-      inputSchema: { nodeId, autoFixSafeTokens: z.boolean().default(false) },
-    },
-    wrap(async (args) => {
-      const { report, fixed, fixWarnings } = await studio.audit(args);
-      const c = report.counts;
-      const summary =
-        `DS health score ${report.score}/100 for "${report.nodeName}" (${report.scannedNodes} layers). ` +
-        `Detached: ${c.detached_component}, hardcoded colors: ${c.hardcoded_color}, off-palette: ${c.off_palette_color}, off-grid spacing: ${c.off_grid_spacing}, ` +
-        `unbound spacing: ${c.unbound_spacing}, contrast failures: ${c.contrast}.` +
-        (args.autoFixSafeTokens ? ` Auto-fixed ${fixed} binding(s).` : report.fixPlan ? ` ${report.fixPlan.ops.length} safe fix(es) available — rerun with autoFixSafeTokens=true.` : "");
-      return ok(summary, { findings: report.findings.slice(0, 100).map(({ fix: _fix, ...f }) => f), fixWarnings });
-    }),
-  );
-
-  // ---------------------------------------------------------------- Module 4
-  server.registerTool(
-    "figma_generate_dev_handoff",
-    {
-      title: "Generate dev handoff",
-      description: "Creates a [HANDOFF] section next to the frame with a token ledger (CSS / Tailwind v4 / native), responsive constraint notes and a code scaffold for the target stack. Also returns the handoff as Markdown.",
-      inputSchema: {
-        nodeId,
-        targetStack: z.enum(["react_tailwind", "swiftui", "jetpack_compose", "react_native"]),
-        renderOnCanvas: z.boolean().default(true),
-      },
-    },
-    wrap(async (args) => {
-      const r = await studio.handoff(args);
-      return ok(r.sectionId ? `Handoff section ${r.sectionId} created with ${r.tokens} ledger rows.\n\n${r.markdown}` : r.markdown);
-    }),
-  );
-
-  return server;
 }

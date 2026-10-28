@@ -12,8 +12,10 @@ claude mcp add figma-studio -- npx -y @figma-studio/mcp-server
 
 Then open the **Agent Studio (MCP bridge)** plugin in Figma and give your agent the pairing code it shows.
 
-Tools: `figma_transpose_surface`, `figma_resolve_missing_component`, `figma_mirror_rtl`, `figma_apply_text`, `figma_audit_design_system`, `figma_generate_dev_handoff`, `figma_connect`, `figma_status`, `figma_get_selection`, `figma_get_node`, `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout`.
+Core tools (8): `figma_connect`, `figma_inspect`, `figma_transpose_surface`, `figma_resolve_missing_component`, `figma_mirror_rtl`, `figma_apply_text`, `figma_audit_design_system`, `figma_generate_dev_handoff`. Set `FIGMA_STUDIO_TOOLSET=full` to add `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills` and `figma_set_auto_layout`.
 
-Environment: `FIGMA_STUDIO_PORT` (default 3055), `FIGMA_ACCESS_TOKEN` + `FIGMA_LIBRARY_FILE_KEYS` (optional team-library indexing), `FIGMA_STUDIO_PAIRING_CODE` (optional auto-pair).
+Prompts (slash commands): `adapt_screen`, `localize_rtl`, `audit_and_fix`, `dev_handoff`, `ship_all_platforms`.
+
+Environment: `FIGMA_STUDIO_PORT` (default 3055), `FIGMA_ACCESS_TOKEN` + `FIGMA_LIBRARY_FILE_KEYS` (optional team-library indexing), `FIGMA_STUDIO_PAIRING_CODE` (optional auto-pair), `FIGMA_STUDIO_TOOLSET` (`core` or `full`).
 
 See the repository README for full documentation. MIT licensed. Not affiliated with Figma, Inc.

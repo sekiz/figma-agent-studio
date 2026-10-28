@@ -180,8 +180,10 @@ Some clients only accept tool names matching `^[a-zA-Z0-9_-]{1,64}$`, so `figma.
 | `figma_apply_text` | `updates[]` | Used after translation |
 | `figma_audit_design_system` | `nodeId` | `autoFixSafeTokens` |
 | `figma_generate_dev_handoff` | `nodeId`, `targetStack` | `renderOnCanvas` |
-| `figma_connect`, `figma_status`, `figma_get_selection`, `figma_get_node`, `figma_scan_design_system` | | Session and inspection |
-| `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout` | | Phase-1 primitives |
+| `figma_connect`, `figma_inspect` | | Pairing/status; compact layer outline |
+| `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout` | | Only with `FIGMA_STUDIO_TOOLSET=full` |
+
+**[v1.2] Token efficiency.** Tool definitions are re-sent on every turn, so the default toolset is 8 consolidated tools. `nodeId` is optional everywhere (the default is the current selection), results are plain text with `detail: concise | detailed`, and repeated warnings are grouped. Budgets are enforced by a CI test. MCP **prompts** (`adapt_screen`, `localize_rtl`, `audit_and_fix`, `dev_handoff`, `ship_all_platforms`) package the recommended workflows as slash commands.
 
 ## 8. Acceptance criteria (DoD)
 
@@ -210,4 +212,4 @@ Some clients only accept tool names matching `^[a-zA-Z0-9_-]{1,64}$`, so `figma.
 | 1 | Bridge (rooms, pairing, heartbeat, origin policy), plugin RPC, raw primitives | ✅ |
 | 2 | SurfaceMatrix, safe areas, DS-Sentinel matcher, missing-component protocol, library indexer | ✅ |
 | 3 | RTLMatrix with shielding, DevSpec ledger / notes / scaffolds | ✅ |
-| 4 | 160 tests (unit, integration, stdio e2e, fake-Figma executor), packaging; real-canvas QA and store publishing | 🟡 QA and publishing pending |
+| 4 | 166 tests (unit, integration, stdio e2e, fake-Figma executor), packaging; real-canvas QA and store publishing | 🟡 QA and publishing pending |

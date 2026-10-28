@@ -42,9 +42,10 @@ async function main(): Promise<void> {
     libraryFileKeys: process.env.FIGMA_LIBRARY_FILE_KEYS?.split(",").map((s) => s.trim()).filter(Boolean),
     log,
   });
-  const server = createServer(studio, client, url);
+  const toolset = process.env.FIGMA_STUDIO_TOOLSET === "full" ? "full" : "core";
+  const server = createServer(studio, client, url, toolset);
   await server.connect(new StdioServerTransport());
-  log(`ready — bridge ${url}${bridge ? " (hosted here)" : " (shared)"}; open the Figma plugin and pair with figma_connect`);
+  log(`ready (${toolset} tools) — bridge ${url}${bridge ? " (hosted here)" : " (shared)"}; open the Figma plugin and pair with figma_connect`);
 
   const shutdown = async () => {
     client.close();

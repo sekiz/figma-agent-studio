@@ -6,7 +6,7 @@ Select a desktop frame, ask your agent, and get platform-accurate **iOS**, **And
 
 [Türkçe README](docs/README.tr.md) · [Product requirements (v1.1)](docs/PRD.md) · [Architecture](docs/ARCHITECTURE.md)
 
-> **Status: 0.1 (alpha).** The engines, the bridge, the MCP server and the plugin's plan executor are covered by 160 automated tests, including a strict fake of the Figma Plugin API. The plugin hasn't had broad QA in the real Figma desktop app yet, so please [report](https://github.com/sekiz/figma-agent-studio/issues) anything that behaves differently on a real canvas.
+> **Status: 0.2 (alpha).** The engines, the bridge, the MCP server and the plugin's plan executor are covered by 166 automated tests, including a strict fake of the Figma Plugin API. The plugin hasn't had broad QA in the real Figma desktop app yet, so please [report](https://github.com/sekiz/figma-agent-studio/issues) anything that behaves differently on a real canvas.
 
 ```
 ┌──────────────┐  stdio (MCP)  ┌──────────────────────────┐  ws://127.0.0.1:3055  ┌─────────────────────┐  postMessage  ┌──────────────────┐
@@ -24,8 +24,54 @@ Select a desktop frame, ask your agent, and get platform-accurate **iOS**, **And
 | `figma_mirror_rtl` | Mirrors a screen to RTL with no loss. Horizontal Auto-Layout is reversed *and* its alignment flipped, padding is swapped, text alignment is inverted, directional icons are flipped or swapped to their DS counterparts, and absolute layers are mirrored. Phone numbers, URLs, prices and code stay LTR. Optionally the agent translates the copy to Arabic or Hebrew. |
 | `figma_audit_design_system` | Finds detached components, hardcoded colors that equal a variable, off-palette colors, off-grid spacing, unbound spacing tokens and WCAG AA contrast failures, and gives a health score. With `autoFixSafeTokens` it binds identical values to their variables. |
 | `figma_generate_dev_handoff` | Adds a `[HANDOFF] <Screen> - <Platform>` section: a token ledger (CSS var / Tailwind v4 / SwiftUI / Compose / RN), responsive-constraint notes and a code scaffold (React+Tailwind, SwiftUI, Jetpack Compose or React Native). |
-| `figma_connect`, `figma_status`, `figma_get_selection`, `figma_get_node`, `figma_scan_design_system` | Session and inspection. |
-| `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout`, `figma_apply_text` | Low-level primitives. |
+| `figma_apply_text` | Writes translations (or any copy) into many text layers in one batch. |
+| `figma_connect`, `figma_inspect` | Pairing and connection status; a compact layer outline of the selection or any layer. |
+| `figma_scan_design_system`, `figma_create_frame`, `figma_set_fills`, `figma_set_auto_layout` | Only with `FIGMA_STUDIO_TOOLSET=full`: design-system listing and low-level primitives. |
+
+Every tool acts on the **current selection** when `nodeId` is omitted.
+
+### Workflow prompts (slash commands)
+
+The server ships five ready-made runbooks. In Claude Code they appear as `/figma-studio:<name>`:
+
+| Prompt | What it runs |
+|---|---|
+| `adapt_screen [surfaces]` | Transpose → ask about missing components in one message → resolve → summary |
+| `localize_rtl [ar\|he]` | Mirror → translate with UI-copy rules (keep length, placeholders, brand names) → apply in one batch |
+| `audit_and_fix` | Audit → apply exact-match token bindings → prioritised report (contrast first) |
+| `dev_handoff [stack]` | Handoff section, with the stack picked from the frame's platform |
+| `ship_all_platforms [surfaces]` | Audit + fix → transpose → one decision round → a handoff per platform → summary table |
+
+## Token efficiency
+
+Write-capable Figma MCP servers usually expose dozens of primitive tools. The model reads the node tree as JSON and then issues one call per change. figma-agent-studio does the layout work server-side and applies it as one plan, and its results are written for a model to read:
+
+- **Small, consolidated toolset:** 8 core tools instead of dozens of primitives (`FIGMA_STUDIO_TOOLSET=full` adds 4 more).
+- **One call per job.** The node tree never goes through the model; the engines read it directly.
+- **Plain-text results with a `detail` switch.** `concise` is the default; `detailed` lists every item.
+- **Grouped warnings.** "48× [iOS, Android M3, Tablet] font … not installed" is one line, not 48.
+- **Selection by default.** No separate "get selection" round-trip before each action.
+- **Budgets enforced in CI** (`packages/mcp-server/test/token-budget.test.ts`).
+
+Measured on the same machine with the same method (≈3.6 characters per token, `tools/list` JSON):
+
+| Server | Tools | Tool definitions (re-sent every turn) |
+|---|---|---|
+| cursor-talk-to-figma-mcp 0.3.5 | 40 | ≈ 6,470 tokens |
+| **figma-agent-studio 0.2 (core)** | **8** | **≈ 1,880 tokens** |
+| figma-agent-studio 0.2 (full) | 12 | ≈ 2,650 tokens |
+
+Results for the 1440px fixture screen in the test suite:
+
+| Call | Result size |
+|---|---|
+| `figma_transpose_surface` to iOS, Android, TV and Tablet (170 canvas changes) | ≈ 410 tokens |
+| `figma_mirror_rtl` with Arabic strings to translate | ≈ 170 tokens |
+| `figma_audit_design_system` | ≈ 110 tokens |
+| `figma_generate_dev_handoff` (section rendered on canvas) | ≈ 30 tokens |
+| `figma_inspect` outline of the whole screen | ≈ 400 tokens (raw node JSON: ≈ 2,130) |
+
+For comparison, applying those 170 changes with primitive tools means reading the tree, then making about 170 tool calls over many turns, each turn re-sending the tool definitions. Even with 10 parallel calls per turn, that's on the order of 100k tokens, against about 4k here. That figure is an estimate from the counts above, not a benchmark, and real screens are 10–50× larger than the fixture, which widens the gap.
 
 ## Quick start (about 60 seconds)
 
@@ -72,6 +118,7 @@ The Figma Plugin API can't list components that live in another library file; it
 | `FIGMA_ACCESS_TOKEN` | — | Personal access token used **only** to read library component metadata. |
 | `FIGMA_LIBRARY_FILE_KEYS` | — | Comma-separated library file keys to index. |
 | `FIGMA_STUDIO_PAIRING_CODE` | — | Auto-pair on start (useful for scripted runs). |
+| `FIGMA_STUDIO_TOOLSET` | `core` | `full` adds the design-system listing and low-level primitives. |
 
 ## Design principles
 
@@ -101,7 +148,7 @@ packages/
 ```bash
 pnpm install
 pnpm build        # builds every package (plugin → packages/figma-plugin/dist)
-pnpm test         # 160 tests: engines, bridge, MCP server, stdio e2e, plugin executor on a fake Figma API
+pnpm test         # 166 tests: engines, bridge, MCP server, stdio e2e, plugin executor on a fake Figma API
 pnpm typecheck
 ```
 
